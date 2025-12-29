@@ -1,0 +1,42 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  nightly:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update nightly tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f nightly
+          git push -f origin nightly
+
+      - name: Build release
+        run: ./scripts/build_release.sh
+
+      - name: Package app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent build/Powerflow.app build/Powerflow.app.zip
+
+      - name: Publish nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly
+          prerelease: true
+          body: "Nightly build from ${{ github.sha }}"
+          files: |
+            build/Powerflow.dmg
+            build/Powerflow.app.zip

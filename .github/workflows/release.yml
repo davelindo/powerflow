@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build release
+        run: ./scripts/build_release.sh
+
+      - name: Package app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent build/Powerflow.app build/Powerflow.app.zip
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/Powerflow.dmg
+            build/Powerflow.app.zip
