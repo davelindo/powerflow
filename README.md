@@ -1,8 +1,7 @@
 # Powerflow (Native Swift)
 
 Powerflow is a native macOS menu bar app for monitoring power input, system load,
-and battery health in real time. This fork focuses on the Swift implementation
-under `native-swift/`.
+and battery health in real time. This repository is the Swift-first fork.
 
 Fork reference: https://github.com/lzt1008/powerflow
 
@@ -25,25 +24,26 @@ Fork reference: https://github.com/lzt1008/powerflow
 Open the Xcode project:
 
 ```
-open native-swift/Powerflow.xcodeproj
+open Powerflow.xcodeproj
 ```
 
 Or build from the command line:
 
 ```
-cd native-swift
 xcodebuild -project Powerflow.xcodeproj -scheme Powerflow -configuration Release -destination "platform=macOS" build
 ```
 
 There is also a helper script:
 
 ```
-native-swift/scripts/build_release.sh
+scripts/build_release.sh
 ```
 
 ## Repository Layout
 
-- `native-swift/` - Swift app source, Xcode project, and scripts.
+- `Sources/` - Swift app source.
+- `Resources/` - App resources and Info.plist.
+- `scripts/` - Release build helper.
 - `LICENSE` - Original MIT license.
 
 ## License

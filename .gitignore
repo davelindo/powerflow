@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+build/
 
 # Editor directories and files
 .vscode/*
@@ -29,8 +30,7 @@ target
 db.sqlite
 
 # Xcode
-native-swift/build/
-native-swift/DerivedData/
-native-swift/.swiftpm/
-native-swift/Powerflow.xcodeproj/xcuserdata/
-native-swift/Powerflow.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/
+.swiftpm/
+Powerflow.xcodeproj/xcuserdata/
+Powerflow.xcodeproj/project.xcworkspace/xcuserdata/
