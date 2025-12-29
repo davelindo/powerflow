@@ -73,9 +73,10 @@ final class MacPowerDataProvider: PowerDataProvider {
         let smcTime = batteryInfo.isCharging
             ? (smc.hasTimeToFull ? smc.timeToFull : 0)
             : (smc.hasTimeToEmpty ? smc.timeToEmpty : 0)
-        let timeRemainingMinutes = smcTime > 0
+        let rawTimeRemaining = smcTime > 0
             ? Int(smcTime.rounded())
             : (batteryInfo.timeRemainingMinutes ?? powerSourceReader.timeRemainingMinutes())
+        let timeRemainingMinutes = sanitizeTimeRemaining(rawTimeRemaining, batteryInfo: batteryInfo)
         let thermalPressure = thermalReader.readPressure()
         let (temperatureC, temperatureSource) = primaryTemperature(smc: smc, detailLevel: detailLevel)
         let batteryTemperatureC = smc.hasTemperature && smc.temperature > 0 ? smc.temperature : nil
@@ -168,6 +169,23 @@ final class MacPowerDataProvider: PowerDataProvider {
         }
 
         return (0, nil)
+    }
+
+    private func sanitizeTimeRemaining(_ minutes: Int?, batteryInfo: BatteryInfo) -> Int? {
+        guard let minutes, minutes > 0 else { return nil }
+
+        let maxChargeMinutes = 12 * 60
+        let maxDischargeMinutes = 48 * 60
+
+        if batteryInfo.isCharging {
+            return minutes <= maxChargeMinutes ? minutes : nil
+        }
+
+        if batteryInfo.isExternalConnected {
+            return nil
+        }
+
+        return minutes <= maxDischargeMinutes ? minutes : nil
     }
 
     private func smcReadHints(for settings: PowerSettings) -> SMCReadHints {
