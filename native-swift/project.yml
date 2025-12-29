@@ -1,0 +1,22 @@
+name: Powerflow
+
+options:
+  bundleIdPrefix: com.powerflow
+
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    GENERATE_INFOPLIST_FILE: NO
+
+targets:
+  Powerflow:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    resources:
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.powerflow.app
+        INFOPLIST_FILE: Resources/Info.plist

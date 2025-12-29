@@ -27,3 +27,10 @@ target
 .auto-imports
 .env
 db.sqlite
+
+# Xcode
+native-swift/build/
+native-swift/DerivedData/
+native-swift/.swiftpm/
+native-swift/Powerflow.xcodeproj/xcuserdata/
+native-swift/Powerflow.xcodeproj/project.xcworkspace/xcuserdata/
