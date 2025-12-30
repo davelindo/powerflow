@@ -155,17 +155,17 @@ final class MacPowerDataProvider: PowerDataProvider {
         smc: SMCPowerData,
         detailLevel: PowerSnapshotDetailLevel
     ) -> (Double, String?) {
-        if smc.hasCpuTemperature, smc.cpuTemperature > 0 {
-            let source = smc.cpuTemperatureKey.map { "SMC \($0)" } ?? "SMC CPU"
-            return (smc.cpuTemperature, source)
+        if smc.hasTemperature, smc.temperature > 0 {
+            return (smc.temperature, "SMC Battery")
         }
 
         if detailLevel == .full, let hidTemp = hidTemperatureReader.readCPUTemperature() {
             return (hidTemp, "HID CPU")
         }
 
-        if smc.hasTemperature, smc.temperature > 0 {
-            return (smc.temperature, "SMC Battery")
+        if smc.hasCpuTemperature, smc.cpuTemperature > 0 {
+            let source = smc.cpuTemperatureKey.map { "SMC \($0)" } ?? "SMC CPU"
+            return (smc.cpuTemperature, source)
         }
 
         return (0, nil)

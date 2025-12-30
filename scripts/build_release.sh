@@ -7,6 +7,7 @@ DERIVED_DIR="${BUILD_DIR}/DerivedData"
 APP_PATH="${DERIVED_DIR}/Build/Products/Release/Powerflow.app"
 OUT_APP="${BUILD_DIR}/Powerflow.app"
 OUT_DMG="${BUILD_DIR}/Powerflow.dmg"
+OUT_ZIP="${BUILD_DIR}/Powerflow.zip"
 
 mkdir -p "${BUILD_DIR}"
 
@@ -21,12 +22,18 @@ xcodebuild \
 rm -rf "${OUT_APP}"
 cp -R "${APP_PATH}" "${OUT_APP}"
 
-hdiutil create \
+if hdiutil create \
   -volname "Powerflow" \
   -srcfolder "${OUT_APP}" \
   -ov \
   -format UDZO \
-  "${OUT_DMG}"
+  "${OUT_DMG}"; then
+  echo "DMG: ${OUT_DMG}"
+else
+  rm -f "${OUT_ZIP}"
+  ditto -c -k --sequesterRsrc --keepParent "${OUT_APP}" "${OUT_ZIP}"
+  echo "DMG creation failed; ZIP created instead."
+  echo "ZIP: ${OUT_ZIP}"
+fi
 
 echo "Release app: ${OUT_APP}"
-echo "DMG: ${OUT_DMG}"

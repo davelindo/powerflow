@@ -5,59 +5,67 @@ import SwiftUI
 struct StatusPopoverView: View {
     @EnvironmentObject private var appState: AppState
     @State private var diagnosticsExpanded = false
+    @State private var showingSettings = false
 
     var body: some View {
         let snapshot = appState.snapshot
 
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                OverviewSection(snapshot: snapshot, settings: appState.settings)
-
-                GroupBox {
+        VStack(spacing: 0) {
+            if showingSettings {
+                SettingsView(layout: .popover)
+                    .environmentObject(appState)
+                    .transition(.opacity)
+                    .layoutPriority(1)
+            } else {
+                ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        PowerFlowView(snapshot: snapshot)
-                        Divider()
-                        ConsumptionCard(snapshot: snapshot)
-                    }
-                    .padding(.vertical, 4)
-                }
+                        OverviewSection(snapshot: snapshot, settings: appState.settings)
 
-                HistorySection(history: appState.history)
-
-                if snapshot.adapterWatts > 0 || snapshot.adapterInfo != nil {
-                    AdapterSection(snapshot: snapshot)
-                }
-
-                GroupBox {
-                    if diagnosticsExpanded {
-                        DiagnosticsSection(snapshot: snapshot)
-                            .padding(.top, 4)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                } label: {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            diagnosticsExpanded.toggle()
+                        GroupBox {
+                            VStack(alignment: .leading, spacing: 12) {
+                                PowerFlowView(snapshot: snapshot)
+                                Divider()
+                                ConsumptionCard(snapshot: snapshot)
+                            }
+                            .padding(.vertical, 4)
                         }
-                    } label: {
-                        HStack {
-                            Text("Diagnostics")
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .rotationEffect(.degrees(diagnosticsExpanded ? 90 : 0))
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
 
-                Divider()
-                FooterActions()
+                        HistorySection(history: appState.history)
+
+                        GroupBox {
+                            if diagnosticsExpanded {
+                                DiagnosticsSection(snapshot: snapshot)
+                                    .padding(.top, 4)
+                                    .transition(.opacity.combined(with: .move(edge: .top)))
+                            }
+                        } label: {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    diagnosticsExpanded.toggle()
+                                }
+                            } label: {
+                                HStack {
+                                    Text("Diagnostics")
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .rotationEffect(.degrees(diagnosticsExpanded ? 90 : 0))
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(12)
+                }
+                .transition(.opacity)
+                .layoutPriority(1)
             }
-            .padding(12)
+
+            Divider()
+            FooterActions(showingSettings: $showingSettings)
         }
         .frame(width: 360, height: 520)
         .background(
@@ -222,57 +230,6 @@ private struct OverviewSection: View {
     }
 }
 
-// MARK: - Adapter
-private struct AdapterSection: View {
-    let snapshot: PowerSnapshot
-
-    var body: some View {
-        GroupBox("Adapter") {
-            VStack(alignment: .leading, spacing: 8) {
-                if let name = snapshot.adapterInfo?.name {
-                    LabeledValueRow(label: "Type", value: name)
-                }
-
-                if snapshot.adapterWatts > 0 {
-                    LabeledValueRow(
-                        label: "Rating",
-                        value: String(format: "%.0f W", snapshot.adapterWatts)
-                    )
-                }
-
-                if snapshot.adapterVoltage > 0 && snapshot.adapterAmperage > 0 {
-                    LabeledValueRow(
-                        label: "Output",
-                        value: String(format: "%.1f V x %.2f A", snapshot.adapterVoltage, snapshot.adapterAmperage)
-                    )
-                }
-
-                if let inputText = adapterInputText {
-                    LabeledValueRow(label: "Input (SMC)", value: inputText)
-                }
-            }
-            .font(.caption)
-        }
-    }
-
-    private var adapterInputText: String? {
-        let voltage = snapshot.adapterInputVoltage ?? 0
-        let current = snapshot.adapterInputCurrent ?? 0
-        let power = snapshot.adapterInputPower ?? 0
-
-        if power > 0, voltage > 0, current > 0 {
-            return String(format: "%.1f W (%.1f V x %.2f A)", power, voltage, current)
-        }
-        if power > 0 {
-            return String(format: "%.1f W", power)
-        }
-        if voltage > 0, current > 0 {
-            return String(format: "%.1f V x %.2f A", voltage, current)
-        }
-        return nil
-    }
-}
-
 // MARK: - Diagnostics
 private struct DiagnosticsSection: View {
     let snapshot: PowerSnapshot
@@ -286,6 +243,7 @@ private struct DiagnosticsSection: View {
             let showBatteryCycleFallback = details?.cycleCount == nil && snapshot.batteryCycleCountSMC != nil
             let showBatterySensors = snapshot.batteryCurrentMA != nil || !snapshot.batteryCellVoltages.isEmpty
             let showBatterySection = hasBatteryDetails || showBatteryCycleFallback || showBatterySensors
+            let showAdapterSection = hasAdapterDetails
 
             if showBatterySection {
                 VStack(alignment: .leading, spacing: 6) {
@@ -328,6 +286,38 @@ private struct DiagnosticsSection: View {
                             .map { String(format: "%.2f V", $0) }
                             .joined(separator: " · ")
                         LabeledValueRow(label: "Cells", value: cells)
+                    }
+                }
+
+                Divider()
+            }
+
+            if showAdapterSection {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Adapter")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let name = snapshot.adapterInfo?.name {
+                        LabeledValueRow(label: "Type", value: name)
+                    }
+
+                    if snapshot.adapterWatts > 0 {
+                        LabeledValueRow(
+                            label: "Rating",
+                            value: PowerFormatter.wattsString(snapshot.adapterWatts)
+                        )
+                    }
+
+                    if snapshot.adapterVoltage > 0 && snapshot.adapterAmperage > 0 {
+                        LabeledValueRow(
+                            label: "Output",
+                            value: String(format: "%.1f V x %.2f A", snapshot.adapterVoltage, snapshot.adapterAmperage)
+                        )
+                    }
+
+                    if let inputText = adapterInputText {
+                        LabeledValueRow(label: "Input (SMC)", value: inputText)
                     }
                 }
 
@@ -406,13 +396,38 @@ private struct DiagnosticsSection: View {
 
                         LabeledValueRow(
                             label: "Adapter loss",
-                            value: String(format: "%.1f W", adapterLoss)
+                            value: PowerFormatter.wattsString(adapterLoss)
                         )
                     }
                 }
             }
         }
         .font(.caption)
+    }
+
+    private var hasAdapterDetails: Bool {
+        snapshot.adapterWatts > 0 ||
+        snapshot.adapterInfo != nil ||
+        (snapshot.adapterInputVoltage ?? 0) > 0 ||
+        (snapshot.adapterInputCurrent ?? 0) > 0 ||
+        (snapshot.adapterInputPower ?? 0) > 0
+    }
+
+    private var adapterInputText: String? {
+        let voltage = snapshot.adapterInputVoltage ?? 0
+        let current = snapshot.adapterInputCurrent ?? 0
+        let power = snapshot.adapterInputPower ?? 0
+
+        if power > 0, voltage > 0, current > 0 {
+            return String(format: "%@ (%.1f V x %.2f A)", PowerFormatter.wattsString(power), voltage, current)
+        }
+        if power > 0 {
+            return PowerFormatter.wattsString(power)
+        }
+        if voltage > 0, current > 0 {
+            return String(format: "%.1f V x %.2f A", voltage, current)
+        }
+        return nil
     }
 }
 
@@ -437,7 +452,11 @@ private struct HistorySection: View {
                         title: "System Load",
                         values: systemSeries,
                         color: palette.system,
-                        formatter: PowerFormatter.wattsString
+                        formatter: PowerFormatter.wattsString,
+                        secondaryValues: hasFan ? fanSeries : nil,
+                        secondaryColor: palette.fan,
+                        secondaryFormatter: formatFan,
+                        secondaryLabel: "Fan %"
                     )
 
                     if hasTemp || hasInput {
@@ -490,8 +509,20 @@ private struct HistorySection: View {
         temperatureSeries.contains { $0 > 0.05 }
     }
 
+    private var fanSeries: [Double] {
+        history.map { $0.fanPercentMax ?? 0 }
+    }
+
+    private var hasFan: Bool {
+        fanSeries.contains { $0 > 0.1 }
+    }
+
     private func formatTemp(_ value: Double) -> String {
         String(format: "%.1f C", value)
+    }
+
+    private func formatFan(_ value: Double) -> String {
+        String(format: "%.0f%%", value)
     }
 }
 
@@ -502,12 +533,19 @@ private struct HistoryChartCard: View {
     var height: CGFloat = 90
     var formatter: (Double) -> String = { String(format: "%.1f", $0) }
     var skipZerosForStats: Bool = true
+    var secondaryValues: [Double]? = nil
+    var secondaryColor: Color = .secondary
+    var secondaryFormatter: (Double) -> String = { String(format: "%.0f", $0) }
+    var secondaryLabel: String? = nil
 
     var body: some View {
         let statsValues = filteredStatsValues()
         let minVal = statsValues.min()
         let maxVal = statsValues.max()
         let latestVal = values.last ?? 0
+        let secondaryStats = secondaryStatsValues()
+        let secondaryMin = secondaryStats?.min()
+        let secondaryMax = secondaryStats?.max()
 
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -520,7 +558,12 @@ private struct HistoryChartCard: View {
                     .foregroundStyle(.secondary)
             }
 
-            PowerSparkline(values: values, tint: color)
+            PowerSparkline(
+                values: values,
+                tint: color,
+                secondaryValues: secondaryValues,
+                secondaryTint: secondaryColor
+            )
                 .frame(height: height)
 
             if let minVal, let maxVal {
@@ -528,6 +571,10 @@ private struct HistoryChartCard: View {
                     Text("min \(formatter(minVal))")
                     Spacer()
                     Text("max \(formatter(maxVal))")
+                    if let secondaryMin, let secondaryMax, let secondaryLabel {
+                        Spacer()
+                        Text("\(secondaryLabel) \(secondaryFormatter(secondaryMin))–\(secondaryFormatter(secondaryMax))")
+                    }
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -548,11 +595,19 @@ private struct HistoryChartCard: View {
         let filtered = skipZerosForStats ? values.filter { $0 > 0.01 } : values
         return filtered.isEmpty ? values : filtered
     }
+
+    private func secondaryStatsValues() -> [Double]? {
+        guard let secondaryValues else { return nil }
+        let filtered = secondaryValues.filter { $0 > 0.1 }
+        return filtered.isEmpty ? nil : filtered
+    }
 }
 
 private struct PowerSparkline: View {
     let values: [Double]
     let tint: Color
+    var secondaryValues: [Double]? = nil
+    var secondaryTint: Color = .secondary
 
     var body: some View {
         GeometryReader { proxy in
@@ -563,6 +618,8 @@ private struct PowerSparkline: View {
             let maxVal = max(points.max() ?? 1.0, 1.0) * 1.1
             let minVal = 0.0
             let range = max(maxVal - minVal, 0.001)
+            let secondaryPoints = secondaryValues.map { downsample(values: $0, target: target) }
+            let secondaryRange = 100.0
 
             ZStack {
                 Path { path in
@@ -600,6 +657,26 @@ private struct PowerSparkline: View {
                     tint,
                     style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round)
                 )
+
+                if let secondaryPoints {
+                    Path { path in
+                        guard secondaryPoints.count > 1 else { return }
+                        for (i, v) in secondaryPoints.enumerated() {
+                            let x = w * CGFloat(i) / CGFloat(secondaryPoints.count - 1)
+                            let clamped = min(max(v, 0), secondaryRange)
+                            let y = h * (1 - CGFloat(clamped / secondaryRange))
+                            if i == 0 {
+                                path.move(to: CGPoint(x: x, y: y))
+                            } else {
+                                path.addLine(to: CGPoint(x: x, y: y))
+                            }
+                        }
+                    }
+                    .stroke(
+                        secondaryTint.opacity(0.7),
+                        style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round, dash: [4, 4])
+                    )
+                }
             }
         }
     }
@@ -616,22 +693,36 @@ private struct PowerSparkline: View {
 
 // MARK: - Footer actions
 private struct FooterActions: View {
+    @Binding var showingSettings: Bool
+
     var body: some View {
         HStack {
             Button {
-                SettingsWindowController.shared.show()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showingSettings.toggle()
+                }
             } label: {
-                Label("Settings", systemImage: "gearshape")
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12, weight: .semibold))
             }
+            .buttonStyle(.plain)
+            .help(showingSettings ? "Back" : "Settings")
 
             Spacer()
 
-            Button("Quit") {
+            Button {
                 NSApp.terminate(nil)
+            } label: {
+                Image(systemName: "power")
+                    .font(.system(size: 12, weight: .semibold))
             }
+            .buttonStyle(.plain)
             .keyboardShortcut("q")
+            .help("Quit")
         }
-        .controlSize(.small)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .controlSize(.mini)
     }
 }
 
@@ -771,7 +862,7 @@ struct PowerFlowView: View {
                     valueNote: "Capacity",
                     color: palette.adapter,
                     isActive: flow.adapterActive,
-                    helpText: adapterHelpText,
+                    helpText: nil,
                     layout: .stacked
                 )
                 .position(adapterPoint)
@@ -807,68 +898,6 @@ struct PowerFlowView: View {
         .padding(.horizontal, 4)
     }
 
-    private var adapterHelpText: String? {
-        guard snapshot.adapterWatts > 0 || snapshot.adapterInfo != nil else { return nil }
-        var lines: [String] = []
-
-        if let name = snapshot.adapterInfo?.name {
-            lines.append(name)
-        }
-
-        if snapshot.adapterWatts > 0 {
-            lines.append(String(format: "Rating: %.0f W", snapshot.adapterWatts))
-        }
-        if let inputLine = adapterInputLine {
-            lines.append(inputLine)
-        }
-        if snapshot.adapterVoltage > 0 {
-            lines.append(String(format: "Voltage: %.1f V", snapshot.adapterVoltage))
-        }
-        if snapshot.adapterAmperage > 0 {
-            lines.append(String(format: "Current: %.2f A", snapshot.adapterAmperage))
-        }
-
-        if let manufacturer = snapshot.adapterInfo?.manufacturer {
-            lines.append("Maker: \(manufacturer)")
-        }
-        if let model = snapshot.adapterInfo?.model {
-            lines.append("Model: \(model)")
-        }
-        if let family = snapshot.adapterInfo?.familyCode {
-            lines.append("Family: \(family)")
-        }
-        if let adapterID = snapshot.adapterInfo?.adapterID {
-            lines.append("Adapter ID: \(adapterID)")
-        }
-        if let vendorID = snapshot.adapterInfo?.vendorID {
-            lines.append("Vendor ID: \(vendorID)")
-        }
-        if let productID = snapshot.adapterInfo?.productID {
-            lines.append("Product ID: \(productID)")
-        }
-        if let serial = snapshot.adapterInfo?.serialNumber {
-            lines.append("Serial: \(serial)")
-        }
-
-        return lines.isEmpty ? nil : lines.joined(separator: "\n")
-    }
-
-    private var adapterInputLine: String? {
-        let voltage = snapshot.adapterInputVoltage ?? 0
-        let current = snapshot.adapterInputCurrent ?? 0
-        let power = snapshot.adapterInputPower ?? 0
-
-        if power > 0, voltage > 0, current > 0 {
-            return String(format: "Input: %.1f W (%.1f V x %.2f A)", power, voltage, current)
-        }
-        if power > 0 {
-            return String(format: "Input: %.1f W", power)
-        }
-        if voltage > 0, current > 0 {
-            return String(format: "Input: %.1f V x %.2f A", voltage, current)
-        }
-        return nil
-    }
 }
 
 private struct FlowDiagramState {
@@ -951,7 +980,7 @@ struct ConsumptionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("SMC System Total")
+                Text("Total System Draw")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -1296,6 +1325,7 @@ private struct PowerflowPalette {
     var heatpipe: Color { toned(.systemOrange, fraction: 0.18) }
     var other: Color { toned(.systemGray, fraction: 0.12) }
     var temperature: Color { toned(.systemOrange, fraction: 0.2) }
+    var fan: Color { toned(.systemPurple, fraction: 0.2) }
 
     private func toned(_ base: NSColor, fraction: CGFloat) -> Color {
         guard colorScheme == .light else { return Color(nsColor: base) }

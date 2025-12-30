@@ -18,7 +18,7 @@ final class SettingsWindowController {
 
     private func makeWindow() -> NSWindow {
         let hostingController = NSHostingController(
-            rootView: SettingsView()
+            rootView: SettingsView(layout: .window)
                 .environmentObject(AppState.shared)
         )
 

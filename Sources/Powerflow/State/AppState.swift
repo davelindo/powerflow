@@ -65,7 +65,8 @@ final class AppState: ObservableObject {
     private func apply(_ snapshot: PowerSnapshot) {
         latestSnapshot = snapshot
         if statusSnapshot.batteryLevel != snapshot.batteryLevel
-            || statusSnapshot.isChargingActive != snapshot.isChargingActive {
+            || statusSnapshot.isChargingActive != snapshot.isChargingActive
+            || statusSnapshot.isExternalPowerConnected != snapshot.isExternalPowerConnected {
             statusSnapshot = snapshot
         }
         appendHistory(snapshot)
@@ -105,12 +106,16 @@ final class AppState: ObservableObject {
     }
 
     private func appendHistory(_ snapshot: PowerSnapshot) {
+        let fanPercentMax = snapshot.diagnostics.smc.fanReadings
+            .compactMap { $0.percentMax }
+            .max()
         let point = PowerHistoryPoint(
             timestamp: snapshot.timestamp,
             systemLoad: snapshot.systemLoad,
             screenPower: snapshot.screenPower,
             inputPower: snapshot.systemIn,
-            temperatureC: snapshot.temperatureC
+            temperatureC: snapshot.temperatureC,
+            fanPercentMax: fanPercentMax
         )
         historyBuffer.append(point)
         if historyBuffer.count > historyCapacity {

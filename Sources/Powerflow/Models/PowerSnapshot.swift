@@ -145,6 +145,7 @@ struct PowerHistoryPoint: Equatable {
     let screenPower: Double
     let inputPower: Double
     let temperatureC: Double
+    let fanPercentMax: Double?
 }
 
 extension PowerSnapshot {

@@ -37,14 +37,10 @@ enum PowerFormatter {
     }
 
     static func wattsString(_ value: Double) -> String {
-        String(format: "%.1f W", value)
+        String(format: "%.0fW", value)
     }
 
-    private static func formatStatusTitle(
-        snapshot: PowerSnapshot,
-        settings: PowerSettings,
-        format: String
-    ) -> String {
+    static func tokenValues(snapshot: PowerSnapshot, settings: PowerSettings) -> [String: String] {
         let powerValue = displayPowerString(snapshot: snapshot, settings: settings)
         let batteryValue = "\(snapshot.batteryLevel)%"
         let tempValue = snapshot.temperatureC > 0 ? String(format: "%.1f C", snapshot.temperatureC) : ""
@@ -61,7 +57,7 @@ enum PowerFormatter {
             ? wattsString(snapshot.diagnostics.smc.systemTotal)
             : ""
 
-        let replacements: [String: String] = [
+        return [
             "{power}": powerValue,
             "{battery}": batteryValue,
             "{temp}": tempValue,
@@ -76,7 +72,14 @@ enum PowerFormatter {
             "{smc}": smcValue,
             "{thermal}": thermalValue,
         ]
+    }
 
+    private static func formatStatusTitle(
+        snapshot: PowerSnapshot,
+        settings: PowerSettings,
+        format: String
+    ) -> String {
+        let replacements = tokenValues(snapshot: snapshot, settings: settings)
         var result = format
         for (token, value) in replacements {
             result = result.replacingOccurrences(of: token, with: value)
@@ -109,11 +112,11 @@ enum BatteryIconRenderer {
         let image = NSImage(size: size)
         image.lockFocus()
 
-        let bodyHeight: CGFloat = 9.5
-        let bodyWidth: CGFloat = 13.5
-        let capWidth: CGFloat = 2.5
-        let capHeight: CGFloat = 4.5
-        let capGap: CGFloat = 0.8
+        let bodyHeight: CGFloat = 10.6
+        let bodyWidth: CGFloat = 14.6
+        let capWidth: CGFloat = 2.9
+        let capHeight: CGFloat = 5.2
+        let capGap: CGFloat = 0.6
         let totalWidth = bodyWidth + capGap + capWidth
         let originX = (size.width - totalWidth) * 0.5
         let originY = (size.height - bodyHeight) * 0.5
@@ -129,17 +132,16 @@ enum BatteryIconRenderer {
         let strokeColor = NSColor.black
         strokeColor.setStroke()
 
-        let bodyPath = NSBezierPath(roundedRect: bodyRect, xRadius: 2.2, yRadius: 2.2)
-        bodyPath.lineWidth = 1.3
-        bodyPath.stroke()
+        let bodyPath = NSBezierPath(roundedRect: bodyRect, xRadius: 2.0, yRadius: 2.0)
+        let capPath = NSBezierPath(roundedRect: capRect, xRadius: 1.4, yRadius: 1.4)
 
-        let capPath = NSBezierPath(roundedRect: capRect, xRadius: 1.2, yRadius: 1.2)
-        capPath.lineWidth = 1.3
-        capPath.stroke()
-
+        let inset: CGFloat = 1.2
+        let inner = bodyRect.insetBy(dx: inset, dy: inset)
+        if showsPower {
+            strokeColor.withAlphaComponent(0.16).setFill()
+            NSBezierPath(roundedRect: inner, xRadius: 1.2, yRadius: 1.2).fill()
+        }
         if clamped > 0 {
-            let inset: CGFloat = 1.7
-            let inner = bodyRect.insetBy(dx: inset, dy: inset)
             let fillWidth = max(inner.width * CGFloat(clamped) / 100.0, 1)
             let fillRect = NSRect(x: inner.minX, y: inner.minY, width: fillWidth, height: inner.height)
             let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 0.8, yRadius: 0.8)
@@ -151,8 +153,8 @@ enum BatteryIconRenderer {
             let pointSize = min(bodyRect.width, bodyRect.height) * 0.9
             let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
             let boltImage = bolt.withSymbolConfiguration(config) ?? bolt
-            let maxWidth = bodyRect.width * 0.65
-            let maxHeight = bodyRect.height * 0.85
+            let maxWidth = bodyRect.width * 0.7
+            let maxHeight = bodyRect.height * 0.9
             let baseSize = boltImage.size
             let scale = min(
                 maxWidth / max(baseSize.width, 1),
@@ -164,8 +166,18 @@ enum BatteryIconRenderer {
                 x: bodyRect.midX - boltSize.width * 0.5,
                 y: bodyRect.midY - boltSize.height * 0.5
             )
-            boltImage.draw(in: NSRect(origin: boltOrigin, size: boltSize))
+            if let context = NSGraphicsContext.current {
+                let previousOperation = context.compositingOperation
+                context.compositingOperation = .destinationOut
+                boltImage.draw(in: NSRect(origin: boltOrigin, size: boltSize))
+                context.compositingOperation = previousOperation
+            }
         }
+
+        bodyPath.lineWidth = 1.1
+        bodyPath.stroke()
+        capPath.lineWidth = 1.1
+        capPath.stroke()
 
         image.unlockFocus()
         image.isTemplate = true
