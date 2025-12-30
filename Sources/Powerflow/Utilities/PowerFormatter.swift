@@ -157,11 +157,12 @@ enum BatteryIconRenderer {
             let fillWidth = max(rawWidth, 1)
             let fillRect = NSRect(x: inner.minX, y: inner.minY, width: fillWidth, height: inner.height)
             let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: inner.height * 0.2, yRadius: inner.height * 0.2)
-            strokeColor.setFill()
+            let fillAlpha: CGFloat = overlay == .none ? 1.0 : 0.6
+            strokeColor.withAlphaComponent(fillAlpha).setFill()
             fillPath.fill()
         }
 
-        drawOverlayCutout(in: inner, overlay: overlay)
+        drawOverlay(in: inner, overlay: overlay)
 
         strokeColor.setStroke()
         bodyPath.lineWidth = 1.0
@@ -170,7 +171,7 @@ enum BatteryIconRenderer {
         capPath.stroke()
     }
 
-    private static func drawOverlayCutout(in innerRect: NSRect, overlay: Overlay) {
+    private static func drawOverlay(in innerRect: NSRect, overlay: Overlay) {
         let symbolName: String?
         switch overlay {
         case .none:
@@ -182,14 +183,13 @@ enum BatteryIconRenderer {
         }
 
         guard let symbolName,
-              let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil),
-              let context = NSGraphicsContext.current else { return }
+              let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else { return }
 
-        let pointSize = min(innerRect.width, innerRect.height) * 0.7
+        let pointSize = min(innerRect.width, innerRect.height) * 0.8
         let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
         let overlayImage = symbol.withSymbolConfiguration(config) ?? symbol
-        let maxWidth = innerRect.width * 0.7
-        let maxHeight = innerRect.height * 0.75
+        let maxWidth = innerRect.width * 0.78
+        let maxHeight = innerRect.height * 0.82
         let baseSize = overlayImage.size
         let scale = min(
             maxWidth / max(baseSize.width, 1),
@@ -201,9 +201,7 @@ enum BatteryIconRenderer {
             x: innerRect.midX - overlaySize.width * 0.5,
             y: innerRect.midY - overlaySize.height * 0.5
         )
-        let previousOperation = context.compositingOperation
-        context.compositingOperation = .destinationOut
+
         overlayImage.draw(in: NSRect(origin: overlayOrigin, size: overlaySize))
-        context.compositingOperation = previousOperation
     }
 }
