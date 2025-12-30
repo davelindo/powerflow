@@ -9,6 +9,7 @@ final class PowerMonitor {
     private var detailLevel: PowerSnapshotDetailLevel
     private var settings: PowerSettings
     private var isPopoverVisible: Bool
+    private let updateQueue = DispatchQueue(label: "PowerMonitor.update", qos: .utility)
 
     var onUpdate: ((PowerSnapshot) -> Void)?
 
@@ -30,7 +31,7 @@ final class PowerMonitor {
         interval = resolvedInterval(settings, isPopoverVisible: isPopoverVisible)
         detailLevel = isPopoverVisible ? .full : .summary
         scheduleTimer()
-        sendImmediate()
+        requestUpdate()
     }
 
     func applySettings(_ settings: PowerSettings, isPopoverVisible: Bool) {
@@ -53,10 +54,20 @@ final class PowerMonitor {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: qos))
         timer.schedule(deadline: .now() + interval, repeating: interval)
         timer.setEventHandler { [weak self] in
-            self?.sendImmediate()
+            self?.requestUpdate()
         }
         timer.resume()
         self.timer = timer
+    }
+
+    func triggerImmediateUpdate() {
+        requestUpdate()
+    }
+
+    private func requestUpdate() {
+        updateQueue.async { [weak self] in
+            self?.sendImmediate()
+        }
     }
 
     private func sendImmediate() {

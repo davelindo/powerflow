@@ -57,6 +57,7 @@ final class MacPowerDataProvider: PowerDataProvider {
         let adjustedBatteryRate = adjustedBatteryRate(from: smc, batteryInfo: batteryInfo)
         let batteryPercentSMC = batteryPercent(from: smc)
         let batteryLevel = resolveBatteryLevel(batteryInfo: batteryInfo, smcPercent: batteryPercentSMC)
+        let batteryLevelPrecise = resolveBatteryLevelPrecise(batteryInfo: batteryInfo, smc: smc)
         let batteryCurrentMA = resolveBatteryCurrentMA(smc: smc, batteryInfo: batteryInfo)
         let batteryVoltageMV = resolveBatteryVoltageMV(smc: smc, batteryInfo: batteryInfo)
         let batteryPower = resolveBatteryPower(
@@ -88,6 +89,7 @@ final class MacPowerDataProvider: PowerDataProvider {
             isCharging: batteryInfo.isCharging,
             isExternalPowerConnected: batteryInfo.isExternalConnected,
             batteryLevel: batteryLevel,
+            batteryLevelPrecise: batteryLevelPrecise,
             timeRemainingMinutes: timeRemainingMinutes,
             systemIn: systemIn,
             systemLoad: systemLoad,
@@ -276,6 +278,34 @@ final class MacPowerDataProvider: PowerDataProvider {
         return Int(clamped.rounded())
     }
 
+    private func resolveBatteryLevelPrecise(batteryInfo: BatteryInfo, smc: SMCPowerData) -> Double {
+        if smc.hasBatteryPercent, smc.batteryPercent > 0 {
+            return clampPercent(smc.batteryPercent)
+        }
+
+        if smc.hasCurrentCapacity,
+           (smc.hasFullChargeCapacity || smc.hasDesignCapacity),
+           smc.currentCapacity > 0 {
+            let maxCapacity = smc.hasFullChargeCapacity ? smc.fullChargeCapacity : smc.designCapacity
+            if maxCapacity > 0 {
+                return clampPercent((smc.currentCapacity / maxCapacity) * 100.0)
+            }
+        }
+
+        if batteryInfo.capacityUnits == .mah,
+           let maxCapacity = batteryInfo.maxCapacity,
+           maxCapacity > 0,
+           batteryInfo.currentCapacity > 0 {
+            return clampPercent((Double(batteryInfo.currentCapacity) / Double(maxCapacity)) * 100.0)
+        }
+
+        let fallback = resolveBatteryLevel(
+            batteryInfo: batteryInfo,
+            smcPercent: batteryPercent(from: smc)
+        )
+        return Double(fallback)
+    }
+
     private func resolveBatteryLevel(batteryInfo: BatteryInfo, smcPercent: Int?) -> Int {
         if batteryInfo.capacityUnits == .percent {
             return batteryInfo.batteryPercent
@@ -290,6 +320,10 @@ final class MacPowerDataProvider: PowerDataProvider {
         }
 
         return batteryInfo.batteryPercent
+    }
+
+    private func clampPercent(_ value: Double) -> Double {
+        max(0, min(100, value))
     }
 
     private func resolveBatteryCurrentMA(smc: SMCPowerData, batteryInfo: BatteryInfo) -> Double? {

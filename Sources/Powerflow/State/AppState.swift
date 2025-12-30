@@ -32,6 +32,7 @@ final class AppState: ObservableObject {
 
     private let settingsStore = PowerSettingsStore()
     private let monitor: PowerMonitor
+    private let powerSourceMonitor: PowerSourceMonitor
     private var isApplyingLaunchSetting = false
     private let historyCapacity = 600
     private var latestSnapshot: PowerSnapshot
@@ -51,7 +52,11 @@ final class AppState: ObservableObject {
             settings: storedSettings
         )
 
-        monitor = PowerMonitor(provider: MacPowerDataProvider())
+        let monitor = PowerMonitor(provider: MacPowerDataProvider())
+        self.monitor = monitor
+        powerSourceMonitor = PowerSourceMonitor { [weak monitor] in
+            monitor?.triggerImmediateUpdate()
+        }
         monitor.onUpdate = { [weak self] snapshot in
             DispatchQueue.main.async {
                 self?.apply(snapshot)
@@ -60,11 +65,14 @@ final class AppState: ObservableObject {
 
         syncLaunchAtLoginPreference()
         monitor.start(with: storedSettings, isPopoverVisible: isPopoverVisible)
+        powerSourceMonitor.start()
     }
 
     private func apply(_ snapshot: PowerSnapshot) {
         latestSnapshot = snapshot
+        let levelDelta = abs(statusSnapshot.batteryLevelPrecise - snapshot.batteryLevelPrecise)
         if statusSnapshot.batteryLevel != snapshot.batteryLevel
+            || levelDelta >= 0.2
             || statusSnapshot.isChargingActive != snapshot.isChargingActive
             || statusSnapshot.isExternalPowerConnected != snapshot.isExternalPowerConnected {
             statusSnapshot = snapshot

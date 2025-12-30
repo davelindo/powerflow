@@ -816,7 +816,7 @@ struct PowerFlowView: View {
             let batteryFrom = batteryCharging ? junctionPoint : batteryPoint
             let batteryTo = batteryCharging ? batteryPoint : junctionPoint
             let batteryIconImage = BatteryIconRenderer.dynamicBatteryImage(
-                level: snapshot.batteryLevel,
+                level: snapshot.batteryLevelPrecise,
                 overlay: batteryCharging ? .charging : .none
             )
 
@@ -934,22 +934,35 @@ private struct FlowDiagramState {
         let batteryRate = snapshot.batteryPower
         let batteryRateMagnitude = abs(batteryRate)
         let threshold = 0.05
+        let netFlow = systemIn - systemLoad
+        let netMagnitude = abs(netFlow)
+        let netIsMeaningful = netMagnitude > 1.0
+        let batteryRateReliable = batteryRateMagnitude > threshold
+            && (!netIsMeaningful || batteryRateMagnitude >= netMagnitude * 0.2)
 
-        if batteryRate > threshold {
-            batteryCharging = true
-        } else if batteryRate < -threshold {
-            batteryCharging = false
+        var charging = false
+        if batteryRateReliable {
+            charging = batteryRate > 0
+            if netIsMeaningful, batteryRate * netFlow < 0 {
+                charging = netFlow > 0
+            }
+        } else if netIsMeaningful {
+            charging = netFlow > 0
         } else if snapshot.isChargingActive {
-            batteryCharging = true
-        } else if junctionToBattery > threshold {
-            batteryCharging = true
-        } else if batteryToJunction > threshold {
-            batteryCharging = false
+            charging = true
         } else {
-            batteryCharging = false
+            charging = false
         }
+        batteryCharging = charging
 
-        let magnitude = max(batteryRateMagnitude, batteryCharging ? junctionToBattery : batteryToJunction)
+        let magnitude: Double
+        if batteryRateReliable {
+            magnitude = batteryRateMagnitude
+        } else if netIsMeaningful {
+            magnitude = netMagnitude
+        } else {
+            magnitude = batteryRateMagnitude
+        }
         batteryMagnitude = magnitude
         batteryActive = magnitude > 0.05
         batteryValue = batteryActive ? magnitude : nil
@@ -1109,7 +1122,7 @@ struct FlowEndpoint: View {
                 Image(nsImage: iconImage)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 24, height: 14)
+                    .frame(width: 26, height: 14)
                     .foregroundStyle(color)
             } else {
                 Image(systemName: icon)

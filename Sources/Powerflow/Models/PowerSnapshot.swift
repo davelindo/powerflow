@@ -60,6 +60,7 @@ struct PowerSnapshot: Equatable {
     var isCharging: Bool
     var isExternalPowerConnected: Bool
     var batteryLevel: Int
+    var batteryLevelPrecise: Double
     var timeRemainingMinutes: Int?
     var systemIn: Double
     var systemLoad: Double
@@ -101,6 +102,7 @@ struct PowerSnapshot: Equatable {
         isCharging: false,
         isExternalPowerConnected: false,
         batteryLevel: 0,
+        batteryLevelPrecise: 0,
         timeRemainingMinutes: nil,
         systemIn: 0,
         systemLoad: 0,

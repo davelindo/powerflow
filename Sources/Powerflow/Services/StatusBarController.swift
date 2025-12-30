@@ -12,7 +12,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
     private struct StatusIconKey: Equatable {
         let icon: PowerSettings.StatusBarIcon
-        let batteryLevel: Int
+        let batteryLevel: Double
         let overlay: BatteryIconRenderer.Overlay
         let symbolName: String?
     }
@@ -113,7 +113,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
         if settings.statusBarIcon == .dynamicBattery,
            let image = BatteryIconRenderer.dynamicBatteryImage(
-               level: snapshot.batteryLevel,
+               level: snapshot.batteryLevelPrecise,
                overlay: batteryOverlay(for: snapshot)
            ) {
             button.image = image
@@ -166,7 +166,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         case .dynamicBattery:
             return StatusIconKey(
                 icon: settings.statusBarIcon,
-                batteryLevel: snapshot.batteryLevel,
+                batteryLevel: snapshot.batteryLevelPrecise,
                 overlay: batteryOverlay(for: snapshot),
                 symbolName: nil
             )
