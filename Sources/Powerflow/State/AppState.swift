@@ -147,5 +147,6 @@ final class AppState: ObservableObject {
         guard isPopoverVisible else { return }
         snapshot = latestSnapshot
         history = historyBuffer
+        monitor.triggerImmediateUpdate()
     }
 }

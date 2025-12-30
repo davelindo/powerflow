@@ -11,7 +11,7 @@ protocol PowerDataProvider {
 
 final class MacPowerDataProvider: PowerDataProvider {
     private let ioReader = IORegistryReader()
-    private let smcReader = SMCReader()
+    private let smcReader: SMCReader
     private let thermalReader = ThermalPressureReader()
     private let hidTemperatureReader = HIDTemperatureReader()
     private let powerSourceReader = PowerSourceReader()
@@ -19,10 +19,13 @@ final class MacPowerDataProvider: PowerDataProvider {
     private let isAppleSilicon: Bool
     private let modelIdentifier: String
     private let polarityStore = BatteryRatePolarityStore()
+    private let cpuTempKeyStore = CpuTempKeyStore()
     private var ppbrPolarity: BatteryRatePolarity?
     private var polarityKey: String
     private var batteryCurrentScale: Double?
     private var cachedCpuTemperature: CachedTemperature?
+    private var lastSavedCpuTemperature: CachedTemperature?
+    private var lastSavedCpuTempKeys: [String] = []
 
     init() {
         isAppleSilicon = SystemInfoReader.isAppleSilicon()
@@ -30,20 +33,45 @@ final class MacPowerDataProvider: PowerDataProvider {
         modelIdentifier = SystemInfoReader.hardwareModel() ?? "unknown"
         polarityKey = modelIdentifier
         ppbrPolarity = polarityStore.load(for: modelIdentifier)
+        let cachedCpuTempKeys = cpuTempKeyStore.loadKeys(for: modelIdentifier)
+        lastSavedCpuTempKeys = cachedCpuTempKeys
+        smcReader = SMCReader(cachedCpuTempKeys: cachedCpuTempKeys)
+        cachedCpuTemperature = loadCachedCpuTemperature()
+        lastSavedCpuTemperature = cachedCpuTemperature
     }
 
-    private struct CachedTemperature {
+    private struct CachedTemperature: Codable {
         let value: Double
         let source: String?
         let timestamp: Date
     }
 
-    private static let cpuTempStaleInterval: TimeInterval = 30
+    private struct CpuTempKeyStore {
+        private let defaults = UserDefaults.standard
+
+        func loadKeys(for modelIdentifier: String) -> [String] {
+            defaults.stringArray(forKey: keysKey(for: modelIdentifier)) ?? []
+        }
+
+        func saveKeys(_ keys: [String], for modelIdentifier: String) {
+            defaults.set(keys, forKey: keysKey(for: modelIdentifier))
+        }
+
+        private func keysKey(for modelIdentifier: String) -> String {
+            "powerflow.cachedCpuTempKeys.\(modelIdentifier)"
+        }
+    }
+
+    private static let summaryCpuTempRefreshInterval: TimeInterval = 30
+    private static let fullCpuTempRefreshInterval: TimeInterval = 5
+    private static let maxCachedCpuTempAge: TimeInterval = 120
+    private static let cpuTempPersistInterval: TimeInterval = 60
 
     func readSnapshot(detailLevel: PowerSnapshotDetailLevel, settings: PowerSettings) -> PowerSnapshot {
         let smcHints = smcReadHints(for: settings, detailLevel: detailLevel)
         let batteryInfo = ioReader.readBatteryInfo()
         let smc = smcReader.readPowerData(detailLevel: detailLevel, hints: smcHints)
+        updateCpuTempKeyCacheIfNeeded()
         updatePolarityKey(using: smc)
         let telemetry = batteryInfo.powerTelemetry
         let efficiencyLoss = Double(telemetry?.adapterEfficiencyLoss ?? 0) / 1000.0
@@ -166,31 +194,28 @@ final class MacPowerDataProvider: PowerDataProvider {
         smc: SMCPowerData,
         detailLevel: PowerSnapshotDetailLevel
     ) -> (Double, String?) {
+        let now = Date()
         if smc.hasCpuTemperature, smc.cpuTemperature > 0 {
             let source = smc.cpuTemperatureKey.map { "SMC \($0)" } ?? "SMC CPU"
-            cachedCpuTemperature = CachedTemperature(
-                value: smc.cpuTemperature,
-                source: source,
-                timestamp: Date()
-            )
+            cacheCpuTemperature(value: smc.cpuTemperature, source: source, timestamp: now)
             return (smc.cpuTemperature, source)
         }
 
-        let shouldReadHid = detailLevel == .full || !smc.hasCpuTemperature
+        let cachedAge = cachedCpuTemperatureAge(now: now)
+        let refreshInterval = detailLevel == .full
+            ? Self.fullCpuTempRefreshInterval
+            : Self.summaryCpuTempRefreshInterval
+        let shouldRefresh = cachedAge == nil || (cachedAge ?? 0) > refreshInterval
+        let shouldReadHid = !smc.hasCpuTemperature && shouldRefresh
         if shouldReadHid, let hidTemp = hidTemperatureReader.readCPUTemperature() {
-            cachedCpuTemperature = CachedTemperature(
-                value: hidTemp,
-                source: "HID CPU",
-                timestamp: Date()
-            )
+            cacheCpuTemperature(value: hidTemp, source: "HID CPU", timestamp: now)
             return (hidTemp, "HID CPU")
         }
 
-        if let cachedCpuTemperature {
-            let age = Date().timeIntervalSince(cachedCpuTemperature.timestamp)
-            if age <= Self.cpuTempStaleInterval || detailLevel == .summary {
-                return (cachedCpuTemperature.value, cachedCpuTemperature.source)
-            }
+        if let cachedCpuTemperature,
+           let cachedAge,
+           cachedAge <= Self.maxCachedCpuTempAge {
+            return (cachedCpuTemperature.value, cachedCpuTemperature.source)
         }
 
         if smc.hasTemperature, smc.temperature > 0 {
@@ -198,6 +223,46 @@ final class MacPowerDataProvider: PowerDataProvider {
         }
 
         return (0, nil)
+    }
+
+    private func cacheCpuTemperature(value: Double, source: String?, timestamp: Date) {
+        let cached = CachedTemperature(value: value, source: source, timestamp: timestamp)
+        cachedCpuTemperature = cached
+        persistCachedCpuTemperatureIfNeeded(cached)
+    }
+
+    private func cachedCpuTemperatureAge(now: Date = Date()) -> TimeInterval? {
+        cachedCpuTemperature.map { now.timeIntervalSince($0.timestamp) }
+    }
+
+    private func loadCachedCpuTemperature() -> CachedTemperature? {
+        guard let data = UserDefaults.standard.data(forKey: cpuTempCacheKey) else { return nil }
+        return try? JSONDecoder().decode(CachedTemperature.self, from: data)
+    }
+
+    private func persistCachedCpuTemperatureIfNeeded(_ cached: CachedTemperature) {
+        if let lastSavedCpuTemperature {
+            let age = cached.timestamp.timeIntervalSince(lastSavedCpuTemperature.timestamp)
+            if age < Self.cpuTempPersistInterval { return }
+        }
+        saveCachedCpuTemperature(cached)
+        lastSavedCpuTemperature = cached
+    }
+
+    private func saveCachedCpuTemperature(_ cached: CachedTemperature) {
+        guard let data = try? JSONEncoder().encode(cached) else { return }
+        UserDefaults.standard.set(data, forKey: cpuTempCacheKey)
+    }
+
+    private var cpuTempCacheKey: String {
+        "powerflow.cachedCpuTemperature.\(modelIdentifier)"
+    }
+
+    private func updateCpuTempKeyCacheIfNeeded() {
+        let keys = smcReader.cpuTemperatureKeysCache
+        guard !keys.isEmpty, keys != lastSavedCpuTempKeys else { return }
+        cpuTempKeyStore.saveKeys(keys, for: modelIdentifier)
+        lastSavedCpuTempKeys = keys
     }
 
     private func sanitizeTimeRemaining(_ minutes: Int?, batteryInfo: BatteryInfo) -> Int? {
@@ -224,7 +289,10 @@ final class MacPowerDataProvider: PowerDataProvider {
         let resolvedFormat = resolvedStatusBarFormat(from: settings)
         let needsScreen = settings.statusBarItem == .screen || resolvedFormat.contains("{screen}")
         let needsHeatpipe = settings.statusBarItem == .heatpipe || resolvedFormat.contains("{heatpipe}")
-        let needsTemp = detailLevel == .summary || resolvedFormat.contains("{temp}")
+        let needsTempToken = resolvedFormat.contains("{temp}")
+        let cachedAge = cachedCpuTemperatureAge()
+        let needsTempRefresh = cachedAge == nil || (cachedAge ?? 0) > Self.summaryCpuTempRefreshInterval
+        let needsTemp = detailLevel == .full || needsTempToken || needsTempRefresh
         return SMCReadHints(
             needsScreenPower: needsScreen,
             needsHeatpipePower: needsHeatpipe,

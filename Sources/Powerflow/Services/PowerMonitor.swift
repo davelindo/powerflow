@@ -50,7 +50,11 @@ final class PowerMonitor {
                 self.warmupState = nil
             }
             self.refreshSchedule(force: true)
-            self.requestUpdate()
+            if warmup {
+                self.requestUpdate(detailLevelOverride: .summary, countWarmup: false)
+            } else {
+                self.requestUpdate()
+            }
         }
     }
 
@@ -75,19 +79,31 @@ final class PowerMonitor {
         self.timer = timer
     }
 
-    func triggerImmediateUpdate() {
-        requestUpdate()
+    func triggerImmediateUpdate(
+        detailLevelOverride: PowerSnapshotDetailLevel? = nil,
+        countWarmup: Bool = true
+    ) {
+        requestUpdate(detailLevelOverride: detailLevelOverride, countWarmup: countWarmup)
     }
 
-    private func requestUpdate() {
+    private func requestUpdate(
+        detailLevelOverride: PowerSnapshotDetailLevel? = nil,
+        countWarmup: Bool = true
+    ) {
         runOnUpdateQueue { [weak self] in
-            self?.sendImmediate()
+            self?.sendImmediate(detailLevelOverride: detailLevelOverride, countWarmup: countWarmup)
         }
     }
 
-    private func sendImmediate() {
-        let snapshot = provider.readSnapshot(detailLevel: detailLevel, settings: settings)
-        updateWarmupState()
+    private func sendImmediate(
+        detailLevelOverride: PowerSnapshotDetailLevel? = nil,
+        countWarmup: Bool = true
+    ) {
+        let level = detailLevelOverride ?? detailLevel
+        let snapshot = provider.readSnapshot(detailLevel: level, settings: settings)
+        if countWarmup {
+            updateWarmupState()
+        }
         onUpdate?(snapshot)
     }
 
