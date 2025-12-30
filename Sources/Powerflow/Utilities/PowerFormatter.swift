@@ -108,16 +108,17 @@ enum BatteryIconRenderer {
 
     private static var cache: [String: NSImage] = [:]
 
-    static func dynamicBatteryImage(level: Int, overlay: Overlay) -> NSImage? {
+    static func dynamicBatteryImage(level: Double, overlay: Overlay) -> NSImage? {
         let clamped = min(max(level, 0), 100)
-        let cacheKey = "\(clamped)-\(overlay.rawValue)"
+        let normalized = (clamped * 10).rounded() / 10
+        let cacheKey = String(format: "%.1f-%@", normalized, overlay.rawValue)
         if let cached = cache[cacheKey] {
             return cached
         }
 
         let size = NSSize(width: 24, height: 12)
         let image = NSImage(size: size, flipped: false) { rect in
-            drawBatteryIcon(in: rect, level: clamped, overlay: overlay)
+            drawBatteryIcon(in: rect, level: normalized, overlay: overlay)
             return true
         }
         image.isTemplate = true
@@ -125,49 +126,51 @@ enum BatteryIconRenderer {
         return image
     }
 
-    private static func drawBatteryIcon(in rect: NSRect, level: Int, overlay: Overlay) {
-        guard let context = NSGraphicsContext.current else { return }
-        let pointSize = rect.height * 1.15
-        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
-        guard let outlineSymbol = NSImage(
-            systemSymbolName: "battery.0",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(config),
-        let fillSymbol = NSImage(
-            systemSymbolName: "battery.100",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(config) else { return }
+    private static func drawBatteryIcon(in rect: NSRect, level: Double, overlay: Overlay) {
+        let bodyHeight = rect.height * 0.78
+        let bodyWidth = rect.width * 0.72
+        let capWidth = rect.width * 0.08
+        let capGap = rect.width * 0.03
+        let capHeight = bodyHeight * 0.55
+        let totalWidth = bodyWidth + capGap + capWidth
+        let originX = rect.midX - totalWidth * 0.5
+        let originY = rect.midY - bodyHeight * 0.5
 
-        let baseSize = outlineSymbol.size
-        let baseScale = min(rect.width / baseSize.width, rect.height / baseSize.height)
-        let scale = baseScale * 1.12
-        let symbolRect = NSRect(
-            x: rect.midX - baseSize.width * scale * 0.5,
-            y: rect.midY - baseSize.height * scale * 0.5,
-            width: baseSize.width * scale,
-            height: baseSize.height * scale
+        let bodyRect = NSRect(x: originX, y: originY, width: bodyWidth, height: bodyHeight)
+        let capRect = NSRect(
+            x: bodyRect.maxX + capGap,
+            y: bodyRect.midY - capHeight * 0.5,
+            width: capWidth,
+            height: capHeight
         )
 
-        if let mask = fillSymbol.cgImage(forProposedRect: nil, context: context, hints: nil), level > 0 {
-            context.cgContext.saveGState()
-            context.cgContext.clip(to: symbolRect, mask: mask)
-            let fillWidth = symbolRect.width * CGFloat(level) / 100.0
-            let fillRect = NSRect(
-                x: symbolRect.minX,
-                y: symbolRect.minY,
-                width: fillWidth,
-                height: symbolRect.height
-            )
-            NSColor.black.setFill()
-            context.cgContext.fill(fillRect)
-            context.cgContext.restoreGState()
+        let strokeColor = NSColor.black
+        let bodyRadius = bodyHeight * 0.2
+        let capRadius = capHeight * 0.3
+        let bodyPath = NSBezierPath(roundedRect: bodyRect, xRadius: bodyRadius, yRadius: bodyRadius)
+        let capPath = NSBezierPath(roundedRect: capRect, xRadius: capRadius, yRadius: capRadius)
+
+        let inset = max(1, bodyHeight * 0.12)
+        let inner = bodyRect.insetBy(dx: inset, dy: inset)
+        if level > 0, inner.width > 0 {
+            let rawWidth = inner.width * CGFloat(level) / 100.0
+            let fillWidth = max(rawWidth, 1)
+            let fillRect = NSRect(x: inner.minX, y: inner.minY, width: fillWidth, height: inner.height)
+            let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: inner.height * 0.2, yRadius: inner.height * 0.2)
+            strokeColor.setFill()
+            fillPath.fill()
         }
 
-        outlineSymbol.draw(in: symbolRect)
-        drawOverlay(in: symbolRect, overlay: overlay)
+        drawOverlayCutout(in: inner, overlay: overlay)
+
+        strokeColor.setStroke()
+        bodyPath.lineWidth = 1.0
+        bodyPath.stroke()
+        capPath.lineWidth = 1.0
+        capPath.stroke()
     }
 
-    private static func drawOverlay(in innerRect: NSRect, overlay: Overlay) {
+    private static func drawOverlayCutout(in innerRect: NSRect, overlay: Overlay) {
         let symbolName: String?
         switch overlay {
         case .none:
@@ -179,13 +182,14 @@ enum BatteryIconRenderer {
         }
 
         guard let symbolName,
-              let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else { return }
+              let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil),
+              let context = NSGraphicsContext.current else { return }
 
-        let pointSize = min(innerRect.width, innerRect.height) * 0.6
+        let pointSize = min(innerRect.width, innerRect.height) * 0.7
         let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
         let overlayImage = symbol.withSymbolConfiguration(config) ?? symbol
-        let maxWidth = innerRect.width * 0.6
-        let maxHeight = innerRect.height * 0.6
+        let maxWidth = innerRect.width * 0.7
+        let maxHeight = innerRect.height * 0.75
         let baseSize = overlayImage.size
         let scale = min(
             maxWidth / max(baseSize.width, 1),
@@ -197,7 +201,9 @@ enum BatteryIconRenderer {
             x: innerRect.midX - overlaySize.width * 0.5,
             y: innerRect.midY - overlaySize.height * 0.5
         )
-
+        let previousOperation = context.compositingOperation
+        context.compositingOperation = .destinationOut
         overlayImage.draw(in: NSRect(origin: overlayOrigin, size: overlaySize))
+        context.compositingOperation = previousOperation
     }
 }

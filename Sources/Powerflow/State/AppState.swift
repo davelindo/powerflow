@@ -64,7 +64,9 @@ final class AppState: ObservableObject {
 
     private func apply(_ snapshot: PowerSnapshot) {
         latestSnapshot = snapshot
+        let levelDelta = abs(statusSnapshot.batteryLevelPrecise - snapshot.batteryLevelPrecise)
         if statusSnapshot.batteryLevel != snapshot.batteryLevel
+            || levelDelta >= 0.2
             || statusSnapshot.isChargingActive != snapshot.isChargingActive
             || statusSnapshot.isExternalPowerConnected != snapshot.isExternalPowerConnected {
             statusSnapshot = snapshot

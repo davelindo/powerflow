@@ -810,7 +810,7 @@ private struct MenuBarPreview: View {
             overlay = .none
         }
         return BatteryIconRenderer.dynamicBatteryImage(
-            level: snapshot.batteryLevel,
+            level: snapshot.batteryLevelPrecise,
             overlay: overlay
         )
     }

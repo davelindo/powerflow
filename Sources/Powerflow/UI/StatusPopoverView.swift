@@ -816,7 +816,7 @@ struct PowerFlowView: View {
             let batteryFrom = batteryCharging ? junctionPoint : batteryPoint
             let batteryTo = batteryCharging ? batteryPoint : junctionPoint
             let batteryIconImage = BatteryIconRenderer.dynamicBatteryImage(
-                level: snapshot.batteryLevel,
+                level: snapshot.batteryLevelPrecise,
                 overlay: batteryCharging ? .charging : .none
             )
 
