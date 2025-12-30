@@ -15,6 +15,7 @@
 		3DF6ED3CA4B7DCBF3BECEA7D /* ThermalPressureReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89CBC3379FFB40C0B7820147 /* ThermalPressureReader.swift */; };
 		57689C6F8D03DB7706A70C7D /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1FF1001170BB13E5E4CD28D /* AppDelegate.swift */; };
 		596AFD12F0ED7774C7D040A4 /* PowerSourceReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = F104167A79DD894EF9481D4A /* PowerSourceReader.swift */; };
+		C46308F32813466FB3B7630D /* PowerSourceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92AB7F44357E455383F3E153 /* PowerSourceMonitor.swift */; };
 		5F35DD1D0550DB01FAE4CB99 /* PowerflowApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98B94A6C030B28BE1D0A62C9 /* PowerflowApp.swift */; };
 		69974563DE3F19796E4B50EF /* StatusPopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8BE22D71D715A514FF8741B /* StatusPopoverView.swift */; };
 		A79750F8A7999532F6C5EF55 /* BatteryRatePolarityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACC56CACD56035A4C7FD1D82 /* BatteryRatePolarityStore.swift */; };
@@ -54,6 +55,7 @@
 		D79D0DD09C35A96DFE3AAE6C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		E1FF1001170BB13E5E4CD28D /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		F104167A79DD894EF9481D4A /* PowerSourceReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerSourceReader.swift; sourceTree = "<group>"; };
+		92AB7F44357E455383F3E153 /* PowerSourceMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerSourceMonitor.swift; sourceTree = "<group>"; };
 		F8BE22D71D715A514FF8741B /* StatusPopoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusPopoverView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -79,6 +81,7 @@
 				9FEAD35FF93D9D837BA4BFEB /* PowerMonitor.swift */,
 				6697D76AFEA3302A05E4A339 /* PowerSettingsStore.swift */,
 				F104167A79DD894EF9481D4A /* PowerSourceReader.swift */,
+				92AB7F44357E455383F3E153 /* PowerSourceMonitor.swift */,
 				9AFD7B4993F48BEAF7F979EA /* SMCConnection.swift */,
 				7B98734703B581344D7E68FF /* SMCReader.swift */,
 				5453CB5F6078B85C64618631 /* StatusBarController.swift */,
@@ -225,6 +228,7 @@
 				BA9C17B167FCD764B1E7B713 /* PowerSettingsStore.swift in Sources */,
 				AA14BB6D6EF3B81B00F1DBBA /* PowerSnapshot.swift in Sources */,
 				596AFD12F0ED7774C7D040A4 /* PowerSourceReader.swift in Sources */,
+				C46308F32813466FB3B7630D /* PowerSourceMonitor.swift in Sources */,
 				5F35DD1D0550DB01FAE4CB99 /* PowerflowApp.swift in Sources */,
 				ECF9421B6CA0BD0C32D09769 /* SMCConnection.swift in Sources */,
 				EF95FA4556C044A68AC3CD6D /* SMCReader.swift in Sources */,
