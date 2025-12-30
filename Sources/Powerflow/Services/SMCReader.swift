@@ -246,9 +246,16 @@ final class SMCReader {
             data.hasHeatpipe = true
         }
 
-        if hints.needsTemperature, let value = connection.readKey("TB0T")?.floatValue() {
-            data.temperature = value
-            data.hasTemperature = true
+        if hints.needsTemperature {
+            if let value = connection.readKey("TB0T")?.floatValue() {
+                data.temperature = value
+                data.hasTemperature = true
+            }
+            if let cpuTemp = readCPUTemperature(connection) {
+                data.cpuTemperature = cpuTemp.value
+                data.cpuTemperatureKey = cpuTemp.key
+                data.hasCpuTemperature = true
+            }
         }
 
         return data

@@ -6,7 +6,7 @@ struct PowerflowApp: App {
 
     var body: some Scene {
         Settings {
-            SettingsView()
+            SettingsView(layout: .window)
                 .environmentObject(AppState.shared)
         }
     }

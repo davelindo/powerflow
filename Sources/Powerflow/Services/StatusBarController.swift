@@ -13,7 +13,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     private struct StatusIconKey: Equatable {
         let icon: PowerSettings.StatusBarIcon
         let batteryLevel: Int
-        let isChargingActive: Bool
+        let overlay: BatteryIconRenderer.Overlay
         let symbolName: String?
     }
 
@@ -114,7 +114,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         if settings.statusBarIcon == .dynamicBattery,
            let image = BatteryIconRenderer.dynamicBatteryImage(
                level: snapshot.batteryLevel,
-               showsPower: snapshot.isChargingActive
+               overlay: batteryOverlay(for: snapshot)
            ) {
             button.image = image
             button.imagePosition = .imageLeading
@@ -167,23 +167,33 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             return StatusIconKey(
                 icon: settings.statusBarIcon,
                 batteryLevel: snapshot.batteryLevel,
-                isChargingActive: snapshot.isChargingActive,
+                overlay: batteryOverlay(for: snapshot),
                 symbolName: nil
             )
         case .none:
             return StatusIconKey(
                 icon: settings.statusBarIcon,
                 batteryLevel: 0,
-                isChargingActive: false,
+                overlay: .none,
                 symbolName: nil
             )
         default:
             return StatusIconKey(
                 icon: settings.statusBarIcon,
                 batteryLevel: 0,
-                isChargingActive: false,
+                overlay: .none,
                 symbolName: resolveSymbolName(settings: settings)
             )
         }
+    }
+
+    private func batteryOverlay(for snapshot: PowerSnapshot) -> BatteryIconRenderer.Overlay {
+        if snapshot.isChargingActive {
+            return .charging
+        }
+        if snapshot.isExternalPowerConnected {
+            return .pluggedIn
+        }
+        return .none
     }
 }
