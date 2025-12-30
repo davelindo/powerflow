@@ -934,22 +934,22 @@ private struct FlowDiagramState {
         let batteryRate = snapshot.batteryPower
         let batteryRateMagnitude = abs(batteryRate)
         let threshold = 0.05
+        let netFlow = systemIn - systemLoad
+        let netMagnitude = abs(netFlow)
+        let hasNetFlow = netMagnitude > threshold
+        let hasBatteryRate = batteryRateMagnitude > threshold
 
-        if batteryRate > threshold {
-            batteryCharging = true
-        } else if batteryRate < -threshold {
-            batteryCharging = false
+        if hasNetFlow {
+            batteryCharging = netFlow > 0
+        } else if hasBatteryRate {
+            batteryCharging = batteryRate > 0
         } else if snapshot.isChargingActive {
             batteryCharging = true
-        } else if junctionToBattery > threshold {
-            batteryCharging = true
-        } else if batteryToJunction > threshold {
-            batteryCharging = false
         } else {
             batteryCharging = false
         }
 
-        let magnitude = max(batteryRateMagnitude, batteryCharging ? junctionToBattery : batteryToJunction)
+        let magnitude = max(netMagnitude, batteryRateMagnitude)
         batteryMagnitude = magnitude
         batteryActive = magnitude > 0.05
         batteryValue = batteryActive ? magnitude : nil
@@ -1109,7 +1109,7 @@ struct FlowEndpoint: View {
                 Image(nsImage: iconImage)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 24, height: 14)
+                    .frame(width: 26, height: 14)
                     .foregroundStyle(color)
             } else {
                 Image(systemName: icon)

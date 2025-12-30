@@ -116,7 +116,7 @@ enum BatteryIconRenderer {
             return cached
         }
 
-        let size = NSSize(width: 24, height: 12)
+        let size = NSSize(width: 26, height: 14)
         let image = NSImage(size: size, flipped: false) { rect in
             drawBatteryIcon(in: rect, level: normalized, overlay: overlay)
             return true
@@ -157,7 +157,7 @@ enum BatteryIconRenderer {
             let fillWidth = max(rawWidth, 1)
             let fillRect = NSRect(x: inner.minX, y: inner.minY, width: fillWidth, height: inner.height)
             let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: inner.height * 0.2, yRadius: inner.height * 0.2)
-            let fillAlpha: CGFloat = overlay == .none ? 1.0 : 0.6
+            let fillAlpha: CGFloat = overlay == .none ? 1.0 : 0.45
             strokeColor.withAlphaComponent(fillAlpha).setFill()
             fillPath.fill()
         }
@@ -185,11 +185,11 @@ enum BatteryIconRenderer {
         guard let symbolName,
               let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else { return }
 
-        let pointSize = min(innerRect.width, innerRect.height) * 0.8
-        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
+        let pointSize = min(innerRect.width, innerRect.height) * 0.9
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .bold)
         let overlayImage = symbol.withSymbolConfiguration(config) ?? symbol
-        let maxWidth = innerRect.width * 0.78
-        let maxHeight = innerRect.height * 0.82
+        let maxWidth = innerRect.width * 0.85
+        let maxHeight = innerRect.height * 0.9
         let baseSize = overlayImage.size
         let scale = min(
             maxWidth / max(baseSize.width, 1),
