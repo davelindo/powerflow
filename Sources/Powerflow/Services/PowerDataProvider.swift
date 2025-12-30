@@ -41,7 +41,7 @@ final class MacPowerDataProvider: PowerDataProvider {
     private static let cpuTempStaleInterval: TimeInterval = 30
 
     func readSnapshot(detailLevel: PowerSnapshotDetailLevel, settings: PowerSettings) -> PowerSnapshot {
-        let smcHints = smcReadHints(for: settings)
+        let smcHints = smcReadHints(for: settings, detailLevel: detailLevel)
         let batteryInfo = ioReader.readBatteryInfo()
         let smc = smcReader.readPowerData(detailLevel: detailLevel, hints: smcHints)
         updatePolarityKey(using: smc)
@@ -176,7 +176,8 @@ final class MacPowerDataProvider: PowerDataProvider {
             return (smc.cpuTemperature, source)
         }
 
-        if detailLevel == .full, let hidTemp = hidTemperatureReader.readCPUTemperature() {
+        let shouldReadHid = detailLevel == .full || !smc.hasCpuTemperature
+        if shouldReadHid, let hidTemp = hidTemperatureReader.readCPUTemperature() {
             cachedCpuTemperature = CachedTemperature(
                 value: hidTemp,
                 source: "HID CPU",
@@ -187,7 +188,7 @@ final class MacPowerDataProvider: PowerDataProvider {
 
         if let cachedCpuTemperature {
             let age = Date().timeIntervalSince(cachedCpuTemperature.timestamp)
-            if age <= Self.cpuTempStaleInterval {
+            if age <= Self.cpuTempStaleInterval || detailLevel == .summary {
                 return (cachedCpuTemperature.value, cachedCpuTemperature.source)
             }
         }
@@ -216,11 +217,14 @@ final class MacPowerDataProvider: PowerDataProvider {
         return minutes <= maxDischargeMinutes ? minutes : nil
     }
 
-    private func smcReadHints(for settings: PowerSettings) -> SMCReadHints {
+    private func smcReadHints(
+        for settings: PowerSettings,
+        detailLevel: PowerSnapshotDetailLevel
+    ) -> SMCReadHints {
         let resolvedFormat = resolvedStatusBarFormat(from: settings)
         let needsScreen = settings.statusBarItem == .screen || resolvedFormat.contains("{screen}")
         let needsHeatpipe = settings.statusBarItem == .heatpipe || resolvedFormat.contains("{heatpipe}")
-        let needsTemp = resolvedFormat.contains("{temp}")
+        let needsTemp = detailLevel == .summary || resolvedFormat.contains("{temp}")
         return SMCReadHints(
             needsScreenPower: needsScreen,
             needsHeatpipePower: needsHeatpipe,
