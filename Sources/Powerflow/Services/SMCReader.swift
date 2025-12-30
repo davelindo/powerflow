@@ -202,6 +202,19 @@ final class SMCReader {
     private var preferredCapacityKey: String?
     private var cachedCpuTempKeys: [String] = []
     private var didScanCpuTempKeys = false
+    private let cpuTempScanCooldown: TimeInterval = 30
+    private var lastCpuTempScanFailure: Date?
+
+    init(cachedCpuTempKeys: [String] = []) {
+        if !cachedCpuTempKeys.isEmpty {
+            self.cachedCpuTempKeys = cachedCpuTempKeys
+            self.didScanCpuTempKeys = true
+        }
+    }
+
+    var cpuTemperatureKeysCache: [String] {
+        cachedCpuTempKeys
+    }
 
     func readPowerData(detailLevel: PowerSnapshotDetailLevel, hints: SMCReadHints) -> SMCPowerData {
         guard let connection = getConnection() else { return .empty }
@@ -251,7 +264,7 @@ final class SMCReader {
                 data.temperature = value
                 data.hasTemperature = true
             }
-            if let cpuTemp = readCPUTemperature(connection) {
+            if let cpuTemp = readCPUTemperature(connection, allowScan: false) {
                 data.cpuTemperature = cpuTemp.value
                 data.cpuTemperatureKey = cpuTemp.key
                 data.hasCpuTemperature = true
@@ -387,7 +400,7 @@ final class SMCReader {
         data.chargingControl = readChargingControlState(connection)
         data.dischargingControl = readDischargingControlState(connection)
         data.fanReadings = readFanReadings(connection)
-        if let cpuTemp = readCPUTemperature(connection) {
+        if let cpuTemp = readCPUTemperature(connection, allowScan: true) {
             data.cpuTemperature = cpuTemp.value
             data.cpuTemperatureKey = cpuTemp.key
             data.hasCpuTemperature = true
@@ -489,8 +502,22 @@ final class SMCReader {
         return readings
     }
 
-    private func readCPUTemperature(_ connection: SMCConnection) -> (value: Double, key: String)? {
-        let keys = didScanCpuTempKeys ? cachedCpuTempKeys : cpuTempKeys
+    private func readCPUTemperature(
+        _ connection: SMCConnection,
+        allowScan: Bool
+    ) -> (value: Double, key: String)? {
+        let now = Date()
+        let useCachedKeys = didScanCpuTempKeys && !cachedCpuTempKeys.isEmpty
+        if !useCachedKeys,
+           !allowScan {
+            return nil
+        }
+        if !useCachedKeys,
+           let lastCpuTempScanFailure,
+           now.timeIntervalSince(lastCpuTempScanFailure) < cpuTempScanCooldown {
+            return nil
+        }
+        let keys = useCachedKeys ? cachedCpuTempKeys : cpuTempKeys
         var maxTemp: Double = 0
         var maxKey: String = ""
         var seen = Set<String>()
@@ -499,7 +526,7 @@ final class SMCReader {
         for key in keys where !seen.contains(key) {
             seen.insert(key)
             guard let value = connection.readKey(key)?.floatValue() else { continue }
-            if !didScanCpuTempKeys {
+            if !useCachedKeys {
                 discoveredKeys.append(key)
             }
             if value > maxTemp, value < 150 {
@@ -508,11 +535,15 @@ final class SMCReader {
             }
         }
 
-        if !didScanCpuTempKeys {
+        if !useCachedKeys {
             if !discoveredKeys.isEmpty {
                 cachedCpuTempKeys = discoveredKeys
+                didScanCpuTempKeys = true
+                lastCpuTempScanFailure = nil
+            } else {
+                didScanCpuTempKeys = false
+                lastCpuTempScanFailure = now
             }
-            didScanCpuTempKeys = true
         }
 
         return maxTemp > 0 ? (maxTemp, maxKey) : nil

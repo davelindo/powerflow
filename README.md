@@ -5,6 +5,12 @@ and battery health in real time. This repository is the Swift-first fork.
 
 Fork reference: https://github.com/lzt1008/powerflow
 
+## Screenshots
+
+<img src="assets/dashboard.png" alt="Powerflow dashboard" width="520">
+
+<img src="assets/graphs.png" alt="History and charts" width="260"> <img src="assets/settings.png" alt="Settings" width="260">
+
 ## Features
 
 - Menu bar power readout with customizable format and icon.

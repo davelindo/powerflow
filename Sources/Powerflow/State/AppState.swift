@@ -31,12 +31,16 @@ final class AppState: ObservableObject {
     }
 
     private let settingsStore = PowerSettingsStore()
+    private let warmupStore = PowerWarmupStore()
     private let monitor: PowerMonitor
     private let powerSourceMonitor: PowerSourceMonitor
     private var isApplyingLaunchSetting = false
     private let historyCapacity = 600
     private var latestSnapshot: PowerSnapshot
     private var historyBuffer: [PowerHistoryPoint]
+    private var modelIdentifier: String? {
+        SystemInfoReader.hardwareModel()
+    }
 
     private init() {
         let storedSettings = settingsStore.load()
@@ -62,9 +66,18 @@ final class AppState: ObservableObject {
                 self?.apply(snapshot)
             }
         }
+        monitor.onWarmupCompleted = { [weak self] in
+            guard let self else { return }
+            self.warmupStore.markCompleted(for: self.modelIdentifier)
+        }
 
         syncLaunchAtLoginPreference()
-        monitor.start(with: storedSettings, isPopoverVisible: isPopoverVisible)
+        let modelIdentifier = self.modelIdentifier
+        let shouldWarmup = warmupStore.shouldWarmup(for: modelIdentifier)
+        if shouldWarmup {
+            warmupStore.markWarmupAttempted(for: modelIdentifier)
+        }
+        monitor.start(with: storedSettings, isPopoverVisible: isPopoverVisible, warmup: shouldWarmup)
         powerSourceMonitor.start()
     }
 
@@ -142,5 +155,6 @@ final class AppState: ObservableObject {
         guard isPopoverVisible else { return }
         snapshot = latestSnapshot
         history = historyBuffer
+        monitor.triggerImmediateUpdate()
     }
 }
