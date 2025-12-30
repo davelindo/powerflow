@@ -936,20 +936,33 @@ private struct FlowDiagramState {
         let threshold = 0.05
         let netFlow = systemIn - systemLoad
         let netMagnitude = abs(netFlow)
-        let hasNetFlow = netMagnitude > threshold
-        let hasBatteryRate = batteryRateMagnitude > threshold
+        let netIsMeaningful = netMagnitude > 1.0
+        let batteryRateReliable = batteryRateMagnitude > threshold
+            && (!netIsMeaningful || batteryRateMagnitude >= netMagnitude * 0.2)
 
-        if hasNetFlow {
-            batteryCharging = netFlow > 0
-        } else if hasBatteryRate {
-            batteryCharging = batteryRate > 0
+        var charging = false
+        if batteryRateReliable {
+            charging = batteryRate > 0
+            if netIsMeaningful, batteryRate * netFlow < 0 {
+                charging = netFlow > 0
+            }
+        } else if netIsMeaningful {
+            charging = netFlow > 0
         } else if snapshot.isChargingActive {
-            batteryCharging = true
+            charging = true
         } else {
-            batteryCharging = false
+            charging = false
         }
+        batteryCharging = charging
 
-        let magnitude = max(netMagnitude, batteryRateMagnitude)
+        let magnitude: Double
+        if batteryRateReliable {
+            magnitude = batteryRateMagnitude
+        } else if netIsMeaningful {
+            magnitude = netMagnitude
+        } else {
+            magnitude = batteryRateMagnitude
+        }
         batteryMagnitude = magnitude
         batteryActive = magnitude > 0.05
         batteryValue = batteryActive ? magnitude : nil
