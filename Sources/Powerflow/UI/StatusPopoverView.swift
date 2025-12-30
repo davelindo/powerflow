@@ -175,7 +175,7 @@ private struct OverviewSection: View {
             metrics.append(
                 OverviewMetric(
                     systemImage: "clock",
-                    value: "Est \(Self.formatMinutes(minutes))",
+                    value: Self.formatMinutes(minutes),
                     helpText: nil
                 )
             )
@@ -812,12 +812,12 @@ struct PowerFlowView: View {
             let batteryCharging = flow.batteryCharging
             let batteryFlowValue = flow.batteryMagnitude
             let batteryFlowActive = flow.batteryActive
-        let batteryFlowColor: Color = batteryCharging ? palette.batteryCharging : palette.batteryDischarging
+            let batteryFlowColor: Color = batteryCharging ? palette.batteryCharging : palette.batteryDischarging
             let batteryFrom = batteryCharging ? junctionPoint : batteryPoint
             let batteryTo = batteryCharging ? batteryPoint : junctionPoint
             let batteryIconImage = BatteryIconRenderer.dynamicBatteryImage(
                 level: snapshot.batteryLevel,
-                showsPower: batteryCharging
+                overlay: batteryCharging ? .charging : .none
             )
 
             ZStack {
@@ -1109,7 +1109,7 @@ struct FlowEndpoint: View {
                 Image(nsImage: iconImage)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 18, height: 18)
+                    .frame(width: 24, height: 14)
                     .foregroundStyle(color)
             } else {
                 Image(systemName: icon)

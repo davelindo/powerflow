@@ -801,9 +801,17 @@ private struct MenuBarPreview: View {
 
     private var iconImage: NSImage? {
         guard icon == .dynamicBattery else { return nil }
+        let overlay: BatteryIconRenderer.Overlay
+        if snapshot.isChargingActive {
+            overlay = .charging
+        } else if snapshot.isExternalPowerConnected {
+            overlay = .pluggedIn
+        } else {
+            overlay = .none
+        }
         return BatteryIconRenderer.dynamicBatteryImage(
             level: snapshot.batteryLevel,
-            showsPower: snapshot.isOnExternalPower
+            overlay: overlay
         )
     }
 }

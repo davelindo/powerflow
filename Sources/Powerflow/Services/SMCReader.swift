@@ -251,6 +251,11 @@ final class SMCReader {
                 data.temperature = value
                 data.hasTemperature = true
             }
+            if let cpuTemp = readCPUTemperature(connection) {
+                data.cpuTemperature = cpuTemp.value
+                data.cpuTemperatureKey = cpuTemp.key
+                data.hasCpuTemperature = true
+            }
         }
 
         return data

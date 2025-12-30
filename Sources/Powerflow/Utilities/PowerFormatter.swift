@@ -100,88 +100,104 @@ enum PowerFormatter {
 }
 
 enum BatteryIconRenderer {
+    enum Overlay: String {
+        case none
+        case charging
+        case pluggedIn
+    }
+
     private static var cache: [String: NSImage] = [:]
 
-    static func dynamicBatteryImage(level: Int, showsPower: Bool) -> NSImage? {
+    static func dynamicBatteryImage(level: Int, overlay: Overlay) -> NSImage? {
         let clamped = min(max(level, 0), 100)
-        let cacheKey = "\(clamped)-\(showsPower ? 1 : 0)"
+        let cacheKey = "\(clamped)-\(overlay.rawValue)"
         if let cached = cache[cacheKey] {
             return cached
         }
-        let size = NSSize(width: 18, height: 18)
-        let image = NSImage(size: size)
-        image.lockFocus()
 
-        let bodyHeight: CGFloat = 10.6
-        let bodyWidth: CGFloat = 14.6
-        let capWidth: CGFloat = 2.9
-        let capHeight: CGFloat = 5.2
-        let capGap: CGFloat = 0.6
-        let totalWidth = bodyWidth + capGap + capWidth
-        let originX = (size.width - totalWidth) * 0.5
-        let originY = (size.height - bodyHeight) * 0.5
-
-        let bodyRect = NSRect(x: originX, y: originY, width: bodyWidth, height: bodyHeight)
-        let capRect = NSRect(
-            x: bodyRect.maxX + capGap,
-            y: bodyRect.midY - capHeight * 0.5,
-            width: capWidth,
-            height: capHeight
-        )
-
-        let strokeColor = NSColor.black
-        strokeColor.setStroke()
-
-        let bodyPath = NSBezierPath(roundedRect: bodyRect, xRadius: 2.0, yRadius: 2.0)
-        let capPath = NSBezierPath(roundedRect: capRect, xRadius: 1.4, yRadius: 1.4)
-
-        let inset: CGFloat = 1.2
-        let inner = bodyRect.insetBy(dx: inset, dy: inset)
-        if showsPower {
-            strokeColor.withAlphaComponent(0.16).setFill()
-            NSBezierPath(roundedRect: inner, xRadius: 1.2, yRadius: 1.2).fill()
+        let size = NSSize(width: 24, height: 12)
+        let image = NSImage(size: size, flipped: false) { rect in
+            drawBatteryIcon(in: rect, level: clamped, overlay: overlay)
+            return true
         }
-        if clamped > 0 {
-            let fillWidth = max(inner.width * CGFloat(clamped) / 100.0, 1)
-            let fillRect = NSRect(x: inner.minX, y: inner.minY, width: fillWidth, height: inner.height)
-            let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 0.8, yRadius: 0.8)
-            strokeColor.setFill()
-            fillPath.fill()
-        }
-
-        if showsPower, let bolt = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: nil) {
-            let pointSize = min(bodyRect.width, bodyRect.height) * 0.9
-            let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
-            let boltImage = bolt.withSymbolConfiguration(config) ?? bolt
-            let maxWidth = bodyRect.width * 0.7
-            let maxHeight = bodyRect.height * 0.9
-            let baseSize = boltImage.size
-            let scale = min(
-                maxWidth / max(baseSize.width, 1),
-                maxHeight / max(baseSize.height, 1),
-                1
-            )
-            let boltSize = NSSize(width: baseSize.width * scale, height: baseSize.height * scale)
-            let boltOrigin = NSPoint(
-                x: bodyRect.midX - boltSize.width * 0.5,
-                y: bodyRect.midY - boltSize.height * 0.5
-            )
-            if let context = NSGraphicsContext.current {
-                let previousOperation = context.compositingOperation
-                context.compositingOperation = .destinationOut
-                boltImage.draw(in: NSRect(origin: boltOrigin, size: boltSize))
-                context.compositingOperation = previousOperation
-            }
-        }
-
-        bodyPath.lineWidth = 1.1
-        bodyPath.stroke()
-        capPath.lineWidth = 1.1
-        capPath.stroke()
-
-        image.unlockFocus()
         image.isTemplate = true
         cache[cacheKey] = image
         return image
+    }
+
+    private static func drawBatteryIcon(in rect: NSRect, level: Int, overlay: Overlay) {
+        guard let context = NSGraphicsContext.current else { return }
+        let pointSize = rect.height * 1.15
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
+        guard let outlineSymbol = NSImage(
+            systemSymbolName: "battery.0",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(config),
+        let fillSymbol = NSImage(
+            systemSymbolName: "battery.100",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(config) else { return }
+
+        let baseSize = outlineSymbol.size
+        let baseScale = min(rect.width / baseSize.width, rect.height / baseSize.height)
+        let scale = baseScale * 1.12
+        let symbolRect = NSRect(
+            x: rect.midX - baseSize.width * scale * 0.5,
+            y: rect.midY - baseSize.height * scale * 0.5,
+            width: baseSize.width * scale,
+            height: baseSize.height * scale
+        )
+
+        if let mask = fillSymbol.cgImage(forProposedRect: nil, context: context, hints: nil), level > 0 {
+            context.cgContext.saveGState()
+            context.cgContext.clip(to: symbolRect, mask: mask)
+            let fillWidth = symbolRect.width * CGFloat(level) / 100.0
+            let fillRect = NSRect(
+                x: symbolRect.minX,
+                y: symbolRect.minY,
+                width: fillWidth,
+                height: symbolRect.height
+            )
+            NSColor.black.setFill()
+            context.cgContext.fill(fillRect)
+            context.cgContext.restoreGState()
+        }
+
+        outlineSymbol.draw(in: symbolRect)
+        drawOverlay(in: symbolRect, overlay: overlay)
+    }
+
+    private static func drawOverlay(in innerRect: NSRect, overlay: Overlay) {
+        let symbolName: String?
+        switch overlay {
+        case .none:
+            symbolName = nil
+        case .charging:
+            symbolName = "bolt.fill"
+        case .pluggedIn:
+            symbolName = "powerplug.fill"
+        }
+
+        guard let symbolName,
+              let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else { return }
+
+        let pointSize = min(innerRect.width, innerRect.height) * 0.6
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
+        let overlayImage = symbol.withSymbolConfiguration(config) ?? symbol
+        let maxWidth = innerRect.width * 0.6
+        let maxHeight = innerRect.height * 0.6
+        let baseSize = overlayImage.size
+        let scale = min(
+            maxWidth / max(baseSize.width, 1),
+            maxHeight / max(baseSize.height, 1),
+            1
+        )
+        let overlaySize = NSSize(width: baseSize.width * scale, height: baseSize.height * scale)
+        let overlayOrigin = NSPoint(
+            x: innerRect.midX - overlaySize.width * 0.5,
+            y: innerRect.midY - overlaySize.height * 0.5
+        )
+
+        overlayImage.draw(in: NSRect(origin: overlayOrigin, size: overlaySize))
     }
 }
