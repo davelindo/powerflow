@@ -220,3 +220,22 @@ extension PowerSnapshot {
         }
     }
 }
+
+extension PowerSnapshot {
+    var powerBalanceMismatch: Double {
+        abs((systemIn - systemLoad) - batteryPower)
+    }
+
+    var isPowerBalanceConsistent: Bool {
+        let net = systemIn - systemLoad
+        let netMagnitude = abs(net)
+        let batteryMagnitude = abs(batteryPower)
+        if netMagnitude < 0.5 && batteryMagnitude < 0.5 {
+            return true
+        }
+
+        let allowedMismatch = max(1.0, max(netMagnitude, batteryMagnitude) * 0.25)
+        let signMatches = net == 0 || batteryPower == 0 || (net > 0) == (batteryPower > 0)
+        return signMatches && powerBalanceMismatch <= allowedMismatch
+    }
+}

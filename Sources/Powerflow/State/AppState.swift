@@ -38,8 +38,18 @@ final class AppState: ObservableObject {
     private let historyCapacity = 600
     private var latestSnapshot: PowerSnapshot
     private var historyBuffer: [PowerHistoryPoint]
+    private var pendingSnapshot: PendingSnapshot?
+    private var lastHistorySampleAt: Date?
+    private var lastConsistencyRetryAt: Date?
     private var modelIdentifier: String? {
         SystemInfoReader.hardwareModel()
+    }
+
+    private struct PendingSnapshot {
+        var bestSnapshot: PowerSnapshot
+        var bestScore: Double
+        var startedAt: Date
+        var attempts: Int
     }
 
     private init() {
@@ -82,19 +92,20 @@ final class AppState: ObservableObject {
     }
 
     private func apply(_ snapshot: PowerSnapshot) {
-        latestSnapshot = snapshot
-        let levelDelta = abs(statusSnapshot.batteryLevelPrecise - snapshot.batteryLevelPrecise)
-        if statusSnapshot.batteryLevel != snapshot.batteryLevel
+        guard let acceptedSnapshot = resolveSnapshot(snapshot) else { return }
+        latestSnapshot = acceptedSnapshot
+        let levelDelta = abs(statusSnapshot.batteryLevelPrecise - acceptedSnapshot.batteryLevelPrecise)
+        if statusSnapshot.batteryLevel != acceptedSnapshot.batteryLevel
             || levelDelta >= 0.2
-            || statusSnapshot.isChargingActive != snapshot.isChargingActive
-            || statusSnapshot.isExternalPowerConnected != snapshot.isExternalPowerConnected {
-            statusSnapshot = snapshot
+            || statusSnapshot.isChargingActive != acceptedSnapshot.isChargingActive
+            || statusSnapshot.isExternalPowerConnected != acceptedSnapshot.isExternalPowerConnected {
+            statusSnapshot = acceptedSnapshot
         }
-        appendHistory(snapshot)
-        refreshStatusBarTitle(using: snapshot)
+        appendHistory(acceptedSnapshot)
+        refreshStatusBarTitle(using: acceptedSnapshot)
 
-        if isPopoverVisible, self.snapshot != snapshot {
-            self.snapshot = snapshot
+        if isPopoverVisible, self.snapshot != acceptedSnapshot {
+            self.snapshot = acceptedSnapshot
         }
     }
 
@@ -127,6 +138,12 @@ final class AppState: ObservableObject {
     }
 
     private func appendHistory(_ snapshot: PowerSnapshot) {
+        let now = snapshot.timestamp
+        if let lastSample = lastHistorySampleAt,
+           now.timeIntervalSince(lastSample) < historySampleInterval() {
+            return
+        }
+        lastHistorySampleAt = now
         let fanPercentMax = snapshot.diagnostics.smc.fanReadings
             .compactMap { $0.percentMax }
             .max()
@@ -148,6 +165,71 @@ final class AppState: ObservableObject {
                 history.removeFirst(history.count - historyCapacity)
             }
         }
+    }
+
+    private func resolveSnapshot(_ snapshot: PowerSnapshot) -> PowerSnapshot? {
+        if snapshot.isPowerBalanceConsistent {
+            pendingSnapshot = nil
+            return snapshot
+        }
+
+        let now = Date()
+        let score = snapshot.powerBalanceMismatch
+        if var pending = pendingSnapshot {
+            pending.attempts += 1
+            if score < pending.bestScore {
+                pending.bestScore = score
+                pending.bestSnapshot = snapshot
+            }
+            pendingSnapshot = pending
+            if shouldAcceptPending(now: now, pending: pending) {
+                let best = pending.bestSnapshot
+                pendingSnapshot = nil
+                return best
+            }
+        } else {
+            pendingSnapshot = PendingSnapshot(
+                bestSnapshot: snapshot,
+                bestScore: score,
+                startedAt: now,
+                attempts: 1
+            )
+        }
+
+        requestConsistencyRetryIfNeeded(now: now)
+        return nil
+    }
+
+    private func shouldAcceptPending(now: Date, pending: PendingSnapshot) -> Bool {
+        let holdWindow = consistencyHoldWindow()
+        if now.timeIntervalSince(pending.startedAt) >= holdWindow {
+            return true
+        }
+        return pending.attempts >= 3
+    }
+
+    private func consistencyHoldWindow() -> TimeInterval {
+        let base = max(settings.updateIntervalSeconds, PowerSettings.minimumUpdateInterval)
+        return min(max(base * 0.75, 1.0), 2.5)
+    }
+
+    private func requestConsistencyRetryIfNeeded(now: Date) {
+        guard isPopoverVisible else { return }
+        let retryInterval: TimeInterval = 0.4
+        if let lastRetry = lastConsistencyRetryAt,
+           now.timeIntervalSince(lastRetry) < retryInterval {
+            return
+        }
+        lastConsistencyRetryAt = now
+        monitor.triggerImmediateUpdate(detailLevelOverride: .full, countWarmup: false)
+    }
+
+    private func historySampleInterval() -> TimeInterval {
+        let base = max(settings.updateIntervalSeconds, PowerSettings.minimumUpdateInterval)
+        if isPopoverVisible {
+            return max(base * 2.0, 4.0)
+        }
+        return max(base * 4.0, 10.0)
     }
 
     private func handlePopoverVisibilityChange() {
