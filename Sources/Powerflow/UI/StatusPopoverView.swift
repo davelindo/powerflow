@@ -534,11 +534,14 @@ private struct HistoryChartCard: View {
     var secondaryLabel: String? = nil
 
     var body: some View {
-        let statsValues = filteredStatsValues()
+        let maxSamples = 240
+        let primaryValues = truncatedValues(values, maxSamples: maxSamples)
+        let secondarySeries = secondaryValues.map { truncatedValues($0, maxSamples: maxSamples) }
+        let statsValues = filteredStatsValues(primaryValues)
         let minVal = statsValues.min()
         let maxVal = statsValues.max()
-        let latestVal = values.last ?? 0
-        let secondaryStats = secondaryStatsValues()
+        let latestVal = primaryValues.last ?? 0
+        let secondaryStats = secondaryStatsValues(secondarySeries)
         let secondaryMin = secondaryStats?.min()
         let secondaryMax = secondaryStats?.max()
 
@@ -554,9 +557,9 @@ private struct HistoryChartCard: View {
             }
 
             PowerSparkline(
-                values: values,
+                values: primaryValues,
                 tint: color,
-                secondaryValues: secondaryValues,
+                secondaryValues: secondarySeries,
                 secondaryTint: secondaryColor
             )
                 .frame(height: height)
@@ -586,15 +589,19 @@ private struct HistoryChartCard: View {
         )
     }
 
-    private func filteredStatsValues() -> [Double] {
+    private func filteredStatsValues(_ values: [Double]) -> [Double] {
         let filtered = skipZerosForStats ? values.filter { $0 > 0.01 } : values
         return filtered.isEmpty ? values : filtered
     }
 
-    private func secondaryStatsValues() -> [Double]? {
-        guard let secondaryValues else { return nil }
-        let filtered = secondaryValues.filter { $0 > 0.1 }
+    private func secondaryStatsValues(_ values: [Double]?) -> [Double]? {
+        guard let values else { return nil }
+        let filtered = values.filter { $0 > 0.1 }
         return filtered.isEmpty ? nil : filtered
+    }
+
+    private func truncatedValues(_ values: [Double], maxSamples: Int) -> [Double] {
+        values.count > maxSamples ? Array(values.suffix(maxSamples)) : values
     }
 }
 
