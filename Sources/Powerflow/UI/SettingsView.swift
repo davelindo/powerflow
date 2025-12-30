@@ -13,6 +13,8 @@ struct SettingsView: View {
     @State private var selectedTemplateIndex: Int?
     @State private var dropTargetIndex: Int?
     @State private var templateTokenWidths: [Int: CGFloat] = [:]
+    @State private var templateTokens: [FormatToken] = []
+    @State private var templateTokensFormat = ""
     @State private var isTrashTargeted = false
     @State private var poofTrigger = 0
     let layout: Layout
@@ -79,6 +81,12 @@ struct SettingsView: View {
         .frame(width: layout == .window ? 460 : nil, height: layout == .window ? 560 : nil)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .controlSize(isCompact ? .mini : .regular)
+        .onAppear {
+            syncTemplateTokens(with: appState.settings.statusBarFormat)
+        }
+        .onChange(of: appState.settings.statusBarFormat) { _, newValue in
+            syncTemplateTokens(with: newValue)
+        }
         .alert(
             "Launch at Login Failed",
             isPresented: Binding(
@@ -128,7 +136,13 @@ struct SettingsView: View {
     }
 
     private var menubarSection: some View {
-        sectionContainer(title: "Menubar", systemImage: "menubar.rectangle") {
+        let shouldMeasureWidths = draggedTemplateIndex != nil || dropTargetIndex != nil
+        let tokenValues = PowerFormatter.tokenValues(
+            snapshot: appState.snapshot,
+            settings: appState.settings
+        )
+
+        return sectionContainer(title: "Menubar", systemImage: "menubar.rectangle") {
             VStack(alignment: .leading, spacing: layout == .popover ? 8 : 14) {
                 HStack {
                     Text("Preview")
@@ -177,14 +191,18 @@ struct SettingsView: View {
                                         TemplateInsertionMarker()
                                     }
                                     TokenPill(
-                                        text: displayLabel(for: token),
+                                        text: displayLabel(for: token, tokenValues: tokenValues),
                                         payload: token.id,
                                         compact: layout == .popover,
                                         isSelected: selectedTemplateIndex == index,
                                         isTemplate: true,
                                         dragAction: { draggedTemplateIndex = index }
                                     )
-                                    .background(TokenWidthReader(index: index, widths: $templateTokenWidths))
+                                    .background(alignment: .center) {
+                                        if shouldMeasureWidths {
+                                            TokenWidthReader(index: index, widths: $templateTokenWidths)
+                                        }
+                                    }
                                     .onTapGesture {
                                         selectedTemplateIndex = index
                                     }
@@ -291,11 +309,9 @@ struct SettingsView: View {
     private var powerSection: some View {
         sectionContainer(title: "Power Display", systemImage: "gauge.with.dots.needle.67percent") {
             VStack(alignment: .leading, spacing: 12) {
-                let packageLabel = appState.snapshot.packagePowerLabel
                 Picker("Item", selection: $appState.settings.statusBarItem) {
                     ForEach(PowerSettings.StatusBarItem.allCases) { item in
-                        let label = item == .heatpipe ? "\(packageLabel) Power" : item.label
-                        Text(label).tag(item)
+                        Text(item.label).tag(item)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -337,10 +353,6 @@ struct SettingsView: View {
         }
     }
 
-    private var templateTokens: [FormatToken] {
-        tokenizeFormat(appState.settings.statusBarFormat)
-    }
-
     private var availableTokens: [FormatToken] {
         metricTokens + separatorTokens
     }
@@ -349,11 +361,7 @@ struct SettingsView: View {
         Set(templateTokens.map(\.id))
     }
 
-    private var tokenValues: [String: String] {
-        PowerFormatter.tokenValues(snapshot: appState.snapshot, settings: appState.settings)
-    }
-
-    private func displayLabel(for token: FormatToken) -> String {
+    private func displayLabel(for token: FormatToken, tokenValues: [String: String]) -> String {
         if token.isSeparator {
             if token.id == "sep:space" {
                 return "sp"
@@ -368,7 +376,22 @@ struct SettingsView: View {
     }
 
     private func updateTemplateTokens(_ tokens: [FormatToken]) {
-        appState.settings.statusBarFormat = tokens.map(\.value).joined()
+        templateTokens = tokens
+        let format = tokens.map(\.value).joined()
+        templateTokensFormat = format
+        if format != appState.settings.statusBarFormat {
+            appState.settings.statusBarFormat = format
+        }
+    }
+
+    private func syncTemplateTokens(with format: String) {
+        guard format != templateTokensFormat else { return }
+        templateTokensFormat = format
+        templateTokens = tokenizeFormat(format)
+        if let selectedIndex = selectedTemplateIndex,
+           !templateTokens.indices.contains(selectedIndex) {
+            selectedTemplateIndex = nil
+        }
     }
 
     private func resolveToken(from payload: String) -> FormatToken? {

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0DB13B99DD88BE9584C1BECB /* PowerFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10F223E014B31015012E35C9 /* PowerFormatter.swift */; };
+		0F7D3A1B2C4D5E6F778899AA /* PowerWarmupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B2F6C03A87F4E5A9C123ABC /* PowerWarmupStore.swift */; };
 		1011836C4A12AA326C850368 /* PowerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B93A81B66AD9B6F786437DF8 /* PowerSettings.swift */; };
 		13F6379A68BC0583C8623E89 /* LaunchAtLoginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D56558830396653D62D92A3 /* LaunchAtLoginManager.swift */; };
 		24D1FC605F12A7A9E10FC890 /* HIDTemperatureReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 334759A28F9BD6CA2CA6D280 /* HIDTemperatureReader.swift */; };
@@ -43,6 +44,7 @@
 		5D1A04D3C405245F5DAE24BF /* PowerDataProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerDataProvider.swift; sourceTree = "<group>"; };
 		65111B5059D34B7B9F7B6E0A /* Powerflow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Powerflow.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6697D76AFEA3302A05E4A339 /* PowerSettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerSettingsStore.swift; sourceTree = "<group>"; };
+		7B2F6C03A87F4E5A9C123ABC /* PowerWarmupStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerWarmupStore.swift; sourceTree = "<group>"; };
 		7B98734703B581344D7E68FF /* SMCReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMCReader.swift; sourceTree = "<group>"; };
 		89CBC3379FFB40C0B7820147 /* ThermalPressureReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThermalPressureReader.swift; sourceTree = "<group>"; };
 		8F482C4FB37D026A0537EF06 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -80,6 +82,7 @@
 				5D1A04D3C405245F5DAE24BF /* PowerDataProvider.swift */,
 				9FEAD35FF93D9D837BA4BFEB /* PowerMonitor.swift */,
 				6697D76AFEA3302A05E4A339 /* PowerSettingsStore.swift */,
+				7B2F6C03A87F4E5A9C123ABC /* PowerWarmupStore.swift */,
 				F104167A79DD894EF9481D4A /* PowerSourceReader.swift */,
 				92AB7F44357E455383F3E153 /* PowerSourceMonitor.swift */,
 				9AFD7B4993F48BEAF7F979EA /* SMCConnection.swift */,
@@ -226,6 +229,7 @@
 				DA1DEB4DDD4A9F2EB4BB91CC /* PowerMonitor.swift in Sources */,
 				1011836C4A12AA326C850368 /* PowerSettings.swift in Sources */,
 				BA9C17B167FCD764B1E7B713 /* PowerSettingsStore.swift in Sources */,
+				0F7D3A1B2C4D5E6F778899AA /* PowerWarmupStore.swift in Sources */,
 				AA14BB6D6EF3B81B00F1DBBA /* PowerSnapshot.swift in Sources */,
 				596AFD12F0ED7774C7D040A4 /* PowerSourceReader.swift in Sources */,
 				C46308F32813466FB3B7630D /* PowerSourceMonitor.swift in Sources */,

@@ -154,15 +154,27 @@ private struct OverviewSection: View {
     }
 
 
-    private static func formatMinutes(_ minutes: Int) -> String {
+    private static let hourMinuteFormatter: DateComponentsFormatter = {
         let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = minutes >= 60 ? [.hour, .minute] : [.minute]
+        formatter.allowedUnits = [.hour, .minute]
         formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    private static let minuteFormatter: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.minute]
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    private static func formatMinutes(_ minutes: Int) -> String {
+        let formatter = minutes >= 60 ? hourMinuteFormatter : minuteFormatter
         return formatter.string(from: TimeInterval(minutes * 60)) ?? "\(minutes) min"
     }
 
     private struct OverviewMetric: Identifiable {
-        let id = UUID()
+        let id: String
         let systemImage: String
         let value: String
         let helpText: String?
@@ -174,6 +186,7 @@ private struct OverviewSection: View {
         if let minutes = snapshot.timeRemainingMinutes {
             metrics.append(
                 OverviewMetric(
+                    id: "time",
                     systemImage: "clock",
                     value: Self.formatMinutes(minutes),
                     helpText: nil
@@ -184,6 +197,7 @@ private struct OverviewSection: View {
         if let batteryTemp = snapshot.batteryTemperatureC, batteryTemp > 0 {
             metrics.append(
                 OverviewMetric(
+                    id: "battery-temp",
                     systemImage: "thermometer",
                     value: String(format: "%.1f C", batteryTemp),
                     helpText: "Battery temperature"
@@ -194,6 +208,7 @@ private struct OverviewSection: View {
         if let health = snapshot.batteryHealthPercent {
             metrics.append(
                 OverviewMetric(
+                    id: "battery-health",
                     systemImage: "heart.circle",
                     value: String(format: "%.0f%%", health),
                     helpText: "Battery health"
@@ -204,6 +219,7 @@ private struct OverviewSection: View {
         if let remainingWh = snapshot.batteryRemainingWh {
             metrics.append(
                 OverviewMetric(
+                    id: "battery-remaining",
                     systemImage: "bolt.circle",
                     value: String(format: "%.1f Wh", remainingWh),
                     helpText: "Remaining capacity"
@@ -438,6 +454,13 @@ private struct HistorySection: View {
 
     var body: some View {
         let palette = PowerflowPalette(colorScheme: colorScheme)
+        let systemSeries = history.map { $0.systemLoad }
+        let inputSeries = history.map { $0.inputPower }
+        let temperatureSeries = history.map { $0.temperatureC }
+        let fanSeries = history.map { $0.fanPercentMax ?? 0 }
+        let hasInput = inputSeries.contains { $0 > 0.05 }
+        let hasTemp = temperatureSeries.contains { $0 > 0.05 }
+        let hasFan = fanSeries.contains { $0 > 0.1 }
 
         GroupBox {
             if history.count < 2 {
@@ -487,34 +510,6 @@ private struct HistorySection: View {
         } label: {
             Label("History", systemImage: "chart.xyaxis.line")
         }
-    }
-
-    private var systemSeries: [Double] {
-        history.map { $0.systemLoad }
-    }
-
-    private var inputSeries: [Double] {
-        history.map { $0.inputPower }
-    }
-
-    private var hasInput: Bool {
-        inputSeries.contains { $0 > 0.05 }
-    }
-
-    private var temperatureSeries: [Double] {
-        history.map { $0.temperatureC }
-    }
-
-    private var hasTemp: Bool {
-        temperatureSeries.contains { $0 > 0.05 }
-    }
-
-    private var fanSeries: [Double] {
-        history.map { $0.fanPercentMax ?? 0 }
-    }
-
-    private var hasFan: Bool {
-        fanSeries.contains { $0 > 0.1 }
     }
 
     private func formatTemp(_ value: Double) -> String {
@@ -613,12 +608,17 @@ private struct PowerSparkline: View {
         GeometryReader { proxy in
             let w = max(proxy.size.width, 1)
             let h = max(proxy.size.height, 1)
-            let target = max(2, Int(w.rounded(.down)))
-            let points = downsample(values: values, target: target)
+            let maxSamples = 240
+            let primaryValues = values.count > maxSamples ? Array(values.suffix(maxSamples)) : values
+            let clampedSecondaryValues = secondaryValues.map { values in
+                values.count > maxSamples ? Array(values.suffix(maxSamples)) : values
+            }
+            let target = max(2, min(Int(w.rounded(.down)), maxSamples))
+            let points = downsample(values: primaryValues, target: target)
             let maxVal = max(points.max() ?? 1.0, 1.0) * 1.1
             let minVal = 0.0
             let range = max(maxVal - minVal, 0.001)
-            let secondaryPoints = secondaryValues.map { downsample(values: $0, target: target) }
+            let secondaryPoints = clampedSecondaryValues.map { downsample(values: $0, target: target) }
             let secondaryRange = 100.0
 
             ZStack {
@@ -1037,7 +1037,7 @@ struct ConsumptionCard: View {
     }
 
     struct Segment: Identifiable {
-        let id = UUID()
+        let id: String
         let name: String
         let value: Double
         let color: Color
@@ -1057,10 +1057,11 @@ struct ConsumptionCard: View {
 
         var list: [Segment] = []
         if snapshot.screenPowerAvailable {
-            list.append(Segment(name: "Screen", value: screen, color: palette.screen, helpText: nil))
+            list.append(Segment(id: "screen", name: "Screen", value: screen, color: palette.screen, helpText: nil))
         }
         list.append(
             Segment(
+                id: "package",
                 name: packageLabel,
                 value: heatpipe,
                 color: palette.heatpipe,
@@ -1069,6 +1070,7 @@ struct ConsumptionCard: View {
         )
         list.append(
             Segment(
+                id: "other",
                 name: "Fans + IO",
                 value: other,
                 color: palette.other,

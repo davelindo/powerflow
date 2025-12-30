@@ -31,6 +31,7 @@ final class AppState: ObservableObject {
     }
 
     private let settingsStore = PowerSettingsStore()
+    private let warmupStore = PowerWarmupStore()
     private let monitor: PowerMonitor
     private let powerSourceMonitor: PowerSourceMonitor
     private var isApplyingLaunchSetting = false
@@ -62,9 +63,13 @@ final class AppState: ObservableObject {
                 self?.apply(snapshot)
             }
         }
+        monitor.onWarmupCompleted = { [weak self] in
+            self?.warmupStore.markCompleted()
+        }
 
         syncLaunchAtLoginPreference()
-        monitor.start(with: storedSettings, isPopoverVisible: isPopoverVisible)
+        let shouldWarmup = !warmupStore.hasCompletedWarmup
+        monitor.start(with: storedSettings, isPopoverVisible: isPopoverVisible, warmup: shouldWarmup)
         powerSourceMonitor.start()
     }
 

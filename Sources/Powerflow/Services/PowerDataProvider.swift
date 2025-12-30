@@ -22,6 +22,7 @@ final class MacPowerDataProvider: PowerDataProvider {
     private var ppbrPolarity: BatteryRatePolarity?
     private var polarityKey: String
     private var batteryCurrentScale: Double?
+    private var cachedCpuTemperature: CachedTemperature?
 
     init() {
         isAppleSilicon = SystemInfoReader.isAppleSilicon()
@@ -30,6 +31,14 @@ final class MacPowerDataProvider: PowerDataProvider {
         polarityKey = modelIdentifier
         ppbrPolarity = polarityStore.load(for: modelIdentifier)
     }
+
+    private struct CachedTemperature {
+        let value: Double
+        let source: String?
+        let timestamp: Date
+    }
+
+    private static let cpuTempStaleInterval: TimeInterval = 30
 
     func readSnapshot(detailLevel: PowerSnapshotDetailLevel, settings: PowerSettings) -> PowerSnapshot {
         let smcHints = smcReadHints(for: settings)
@@ -159,11 +168,28 @@ final class MacPowerDataProvider: PowerDataProvider {
     ) -> (Double, String?) {
         if smc.hasCpuTemperature, smc.cpuTemperature > 0 {
             let source = smc.cpuTemperatureKey.map { "SMC \($0)" } ?? "SMC CPU"
+            cachedCpuTemperature = CachedTemperature(
+                value: smc.cpuTemperature,
+                source: source,
+                timestamp: Date()
+            )
             return (smc.cpuTemperature, source)
         }
 
         if detailLevel == .full, let hidTemp = hidTemperatureReader.readCPUTemperature() {
+            cachedCpuTemperature = CachedTemperature(
+                value: hidTemp,
+                source: "HID CPU",
+                timestamp: Date()
+            )
             return (hidTemp, "HID CPU")
+        }
+
+        if let cachedCpuTemperature {
+            let age = Date().timeIntervalSince(cachedCpuTemperature.timestamp)
+            if age <= Self.cpuTempStaleInterval {
+                return (cachedCpuTemperature.value, cachedCpuTemperature.source)
+            }
         }
 
         if smc.hasTemperature, smc.temperature > 0 {
@@ -252,6 +278,10 @@ final class MacPowerDataProvider: PowerDataProvider {
 
         if systemIn > 0, systemLoad > 0 {
             return systemIn - systemLoad
+        }
+
+        if systemIn <= 0, systemLoad > 0 {
+            return -systemLoad
         }
 
         return 0
