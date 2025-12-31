@@ -553,29 +553,39 @@ private struct HistoryChartCard: View {
                 Spacer()
                 Text(formatter(latestVal))
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(color)
             }
 
-            PowerSparkline(
-                values: primaryValues,
-                tint: color,
-                secondaryValues: secondarySeries,
-                secondaryTint: secondaryColor
-            )
-                .frame(height: height)
+            ZStack(alignment: .leading) {
+                PowerSparkline(
+                    values: primaryValues,
+                    tint: color,
+                    secondaryValues: secondarySeries,
+                    secondaryTint: secondaryColor
+                )
 
-            if let minVal, let maxVal {
-                HStack {
-                    Text("min \(formatter(minVal))")
-                    Spacer()
-                    Text("max \(formatter(maxVal))")
-                    if let secondaryMin, let secondaryMax, let secondaryLabel {
+                if let minVal, let maxVal {
+                    VStack(alignment: .leading) {
+                        Text(formatter(maxVal))
                         Spacer()
-                        Text("\(secondaryLabel) \(secondaryFormatter(secondaryMin))–\(secondaryFormatter(secondaryMax))")
+                        Text(formatter(minVal))
                     }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .opacity(0.6)
+                    .padding(.leading, 4)
+                    .allowsHitTesting(false)
                 }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            }
+            .frame(height: height)
+
+            if let secondaryMin, let secondaryMax, let secondaryLabel {
+                HStack {
+                    Text("\(secondaryLabel) \(secondaryFormatter(secondaryMin))–\(secondaryFormatter(secondaryMax))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(10)
@@ -944,8 +954,10 @@ private struct FlowDiagramState {
         let netFlow = systemIn - systemLoad
         let netMagnitude = abs(netFlow)
         let netIsMeaningful = netMagnitude > 1.0
+        let allowedDiscrepancy = max(1.0, netMagnitude * 0.3)
         let batteryRateReliable = batteryRateMagnitude > threshold
-            && (!netIsMeaningful || batteryRateMagnitude >= netMagnitude * 0.2)
+            && (!netIsMeaningful || (batteryRate * netFlow >= 0
+                && abs(batteryRateMagnitude - netMagnitude) <= allowedDiscrepancy))
 
         var charging = false
         if batteryRateReliable {

@@ -242,6 +242,30 @@ final class SMCReader {
             data.hasSystemTotal = true
         }
 
+        if let value = connection.readKey("VD0R")?.floatValue() {
+            data.adapterInputVoltage = value
+            data.hasAdapterInputVoltage = value > 0
+        }
+        if let value = connection.readKey("ID0R")?.floatValue() {
+            data.adapterInputCurrent = value
+            data.hasAdapterInputCurrent = value > 0
+        }
+
+        if let voltage = readPreferredValue(
+            connection,
+            preferredKey: &preferredBatteryVoltageKey,
+            candidates: batteryVoltageKeys,
+            requirePositive: true
+        ) {
+            data.batteryVoltage = voltage.value
+            data.batteryVoltageKey = voltage.key
+            data.hasBatteryVoltage = true
+        }
+        if let value = connection.readKey("B0AC")?.floatValue() {
+            data.batteryCurrent = value
+            data.hasBatteryCurrent = true
+        }
+
         if hints.needsScreenPower, let value = connection.readKey("PDBR")?.floatValue() {
             data.brightness = value
             data.hasBrightness = true
@@ -270,6 +294,8 @@ final class SMCReader {
                 data.hasCpuTemperature = true
             }
         }
+
+        data.fanReadings = readFanReadings(connection, includeDetails: false)
 
         return data
     }
@@ -399,7 +425,7 @@ final class SMCReader {
         data.platformName = connection.readKey("RPlt")?.stringValue()
         data.chargingControl = readChargingControlState(connection)
         data.dischargingControl = readDischargingControlState(connection)
-        data.fanReadings = readFanReadings(connection)
+        data.fanReadings = readFanReadings(connection, includeDetails: true)
         if let cpuTemp = readCPUTemperature(connection, allowScan: true) {
             data.cpuTemperature = cpuTemp.value
             data.cpuTemperatureKey = cpuTemp.key
@@ -456,7 +482,10 @@ final class SMCReader {
         return SMCControlState(state: .unknown, key: nil, rawHex: nil)
     }
 
-    private func readFanReadings(_ connection: SMCConnection) -> [SMCFanReading] {
+    private func readFanReadings(
+        _ connection: SMCConnection,
+        includeDetails: Bool
+    ) -> [SMCFanReading] {
         let countValue = connection.readKey("FNum")?.floatValue() ?? 0
         let count = max(0, Int(countValue.rounded()))
         let maxFans = min(count, 6)
@@ -470,15 +499,24 @@ final class SMCReader {
             guard let rpm = connection.readKey(key)?.floatValue(), rpm > 0 else { continue }
             let maxKey = "F\(index)Mx"
             let maxRpm = connection.readKey(maxKey)?.floatValue()
-            let minKey = "F\(index)Mn"
-            let minRpm = connection.readKey(minKey)?.floatValue()
-            let targetKey = "F\(index)Tg"
-            let targetRpm = connection.readKey(targetKey)?.floatValue()
-            let modeKey = "F\(index)Md"
-            let modeRaw = connection.readKey(modeKey)?.floatValue().map { Int($0.rounded()) }
+            let minRpm: Double?
+            let targetRpm: Double?
+            let modeRaw: Int?
+            if includeDetails {
+                let minKey = "F\(index)Mn"
+                minRpm = connection.readKey(minKey)?.floatValue()
+                let targetKey = "F\(index)Tg"
+                targetRpm = connection.readKey(targetKey)?.floatValue()
+                let modeKey = "F\(index)Md"
+                modeRaw = connection.readKey(modeKey)?.floatValue().map { Int($0.rounded()) }
+            } else {
+                minRpm = nil
+                targetRpm = nil
+                modeRaw = nil
+            }
             let percentMax: Double?
             if let maxRpm, maxRpm > 0 {
-                if let minRpm, minRpm > 0, maxRpm > minRpm {
+                if includeDetails, let minRpm, minRpm > 0, maxRpm > minRpm {
                     percentMax = min(100, max(0, (rpm - minRpm) / (maxRpm - minRpm) * 100))
                 } else {
                     percentMax = min(100, (rpm / maxRpm) * 100)

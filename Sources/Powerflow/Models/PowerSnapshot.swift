@@ -220,3 +220,37 @@ extension PowerSnapshot {
         }
     }
 }
+
+extension PowerSnapshot {
+    var hasSystemPowerData: Bool {
+        if diagnostics.smc.hasDeliveryRate || diagnostics.smc.hasSystemTotal {
+            return true
+        }
+        if let telemetry = diagnostics.telemetry {
+            return telemetry.systemPowerIn != 0
+                || telemetry.systemLoad != 0
+                || telemetry.systemCurrentIn != 0
+                || telemetry.systemVoltageIn != 0
+                || telemetry.systemEnergyConsumed != 0
+        }
+        return false
+    }
+
+    var powerBalanceMismatch: Double {
+        abs((systemIn - systemLoad) - batteryPower)
+    }
+
+    var isPowerBalanceConsistent: Bool {
+        guard hasSystemPowerData else { return true }
+        let net = systemIn - systemLoad
+        let netMagnitude = abs(net)
+        let batteryMagnitude = abs(batteryPower)
+        if netMagnitude < 0.5 && batteryMagnitude < 0.5 {
+            return true
+        }
+
+        let allowedMismatch = max(1.0, max(netMagnitude, batteryMagnitude) * 0.25)
+        let signMatches = net == 0 || batteryPower == 0 || (net > 0) == (batteryPower > 0)
+        return signMatches && powerBalanceMismatch <= allowedMismatch
+    }
+}

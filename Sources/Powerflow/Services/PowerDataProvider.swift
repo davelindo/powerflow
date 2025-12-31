@@ -84,8 +84,15 @@ final class MacPowerDataProvider: PowerDataProvider {
             voltage: adapterInputVoltage,
             current: adapterInputCurrent
         )
-        let systemIn = smc.hasDeliveryRate ? smc.deliveryRate : (telemetrySystemIn ?? adapterInputPower ?? 0)
-        let systemLoad = smc.hasSystemTotal ? smc.systemTotal : (telemetrySystemLoad ?? 0)
+        let hasSmcSystem = smc.hasDeliveryRate && smc.hasSystemTotal
+        let hasTelemetrySystem = telemetrySystemIn != nil && telemetrySystemLoad != nil
+        let useTelemetrySystem = detailLevel == .summary && !hasSmcSystem && hasTelemetrySystem
+        let systemIn = useTelemetrySystem
+            ? (telemetrySystemIn ?? 0)
+            : (smc.hasDeliveryRate ? smc.deliveryRate : (telemetrySystemIn ?? adapterInputPower ?? 0))
+        let systemLoad = useTelemetrySystem
+            ? (telemetrySystemLoad ?? 0)
+            : (smc.hasSystemTotal ? smc.systemTotal : (telemetrySystemLoad ?? 0))
         let lidClosed = smc.lidClosed
         let screenPowerAvailable = smc.hasBrightness && lidClosed != true
         let screenPower = screenPowerAvailable ? smc.brightness : 0
@@ -103,7 +110,8 @@ final class MacPowerDataProvider: PowerDataProvider {
             batteryCurrentMA: batteryCurrentMA,
             batteryVoltageMV: batteryVoltageMV,
             systemIn: systemIn,
-            systemLoad: systemLoad
+            systemLoad: systemLoad,
+            preferTelemetryBatteryPower: useTelemetrySystem
         )
         let adapterPower = adapterInputPower ?? (systemIn + efficiencyLoss)
         let batteryHealthPercent = batteryHealthPercent(from: smc)
@@ -332,8 +340,15 @@ final class MacPowerDataProvider: PowerDataProvider {
         batteryCurrentMA: Double?,
         batteryVoltageMV: Double?,
         systemIn: Double,
-        systemLoad: Double
+        systemLoad: Double,
+        preferTelemetryBatteryPower: Bool
     ) -> Double {
+        if preferTelemetryBatteryPower,
+           let telemetryBatteryPower,
+           abs(telemetryBatteryPower) > 0.01 {
+            return telemetryBatteryPower
+        }
+
         if let adjustedBatteryRate, abs(adjustedBatteryRate) > 0.01 {
             return adjustedBatteryRate
         }
