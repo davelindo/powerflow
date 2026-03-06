@@ -20,6 +20,8 @@
 		69974563DE3F19796E4B50EF /* StatusPopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8BE22D71D715A514FF8741B /* StatusPopoverView.swift */; };
 		903DAD33F67D9B77BEA4680B /* PowerSourceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C542803D6E886B97FBBB27C /* PowerSourceMonitor.swift */; };
 		90CCF00931CAD087B9CD5A86 /* StatusPopoverSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50957D4C3F04B8E410F31350 /* StatusPopoverSections.swift */; };
+		9509DDF2257B4D231BA20C69 /* AppEnergyMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA7ED50958EBE690B4A7F03 /* AppEnergyMonitor.swift */; };
+		9576DD0528AC0C05EA47E805 /* PopoverViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13BB9D8684B714FB707E93E6 /* PopoverViewState.swift */; };
 		A79750F8A7999532F6C5EF55 /* BatteryRatePolarityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACC56CACD56035A4C7FD1D82 /* BatteryRatePolarityStore.swift */; };
 		AA14BB6D6EF3B81B00F1DBBA /* PowerSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38CA7EE7C2B2D533ED8D6B58 /* PowerSnapshot.swift */; };
 		B5CF80317863A2142C456302 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F482C4FB37D026A0537EF06 /* AppState.swift */; };
@@ -32,6 +34,7 @@
 		D8290B7E752424543CA1D42D /* PowerDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D1A04D3C405245F5DAE24BF /* PowerDataProvider.swift */; };
 		DA1DEB4DDD4A9F2EB4BB91CC /* PowerMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FEAD35FF93D9D837BA4BFEB /* PowerMonitor.swift */; };
 		ECF9421B6CA0BD0C32D09769 /* SMCConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AFD7B4993F48BEAF7F979EA /* SMCConnection.swift */; };
+		ED99BCC2B5D26FE4AFC8CDC8 /* AppIconCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF2DCEF5CF80530484E88C86 /* AppIconCache.swift */; };
 		EF95FA4556C044A68AC3CD6D /* SMCReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B98734703B581344D7E68FF /* SMCReader.swift */; };
 		F6452B513EA0443B84036E8A /* PowerWarmupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED94314884460650131F57EC /* PowerWarmupStore.swift */; };
 		FAC11378439348E6B7A695E1 /* SystemInfoReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 214C3EF144A9A20F25A0DA8F /* SystemInfoReader.swift */; };
@@ -52,6 +55,8 @@
 /* Begin PBXFileReference section */
 		0D56558830396653D62D92A3 /* LaunchAtLoginManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginManager.swift; sourceTree = "<group>"; };
 		10F223E014B31015012E35C9 /* PowerFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerFormatter.swift; sourceTree = "<group>"; };
+		13BB9D8684B714FB707E93E6 /* PopoverViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopoverViewState.swift; sourceTree = "<group>"; };
+		1BA7ED50958EBE690B4A7F03 /* AppEnergyMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnergyMonitor.swift; sourceTree = "<group>"; };
 		214C3EF144A9A20F25A0DA8F /* SystemInfoReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemInfoReader.swift; sourceTree = "<group>"; };
 		334759A28F9BD6CA2CA6D280 /* HIDTemperatureReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDTemperatureReader.swift; sourceTree = "<group>"; };
 		38CA7EE7C2B2D533ED8D6B58 /* PowerSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerSnapshot.swift; sourceTree = "<group>"; };
@@ -71,6 +76,7 @@
 		9AFD7B4993F48BEAF7F979EA /* SMCConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMCConnection.swift; sourceTree = "<group>"; };
 		9FEAD35FF93D9D837BA4BFEB /* PowerMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerMonitor.swift; sourceTree = "<group>"; };
 		ACC56CACD56035A4C7FD1D82 /* BatteryRatePolarityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatteryRatePolarityStore.swift; sourceTree = "<group>"; };
+		AF2DCEF5CF80530484E88C86 /* AppIconCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconCache.swift; sourceTree = "<group>"; };
 		B52B3B7A2CA4355779CB87B3 /* PowerSettingsStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerSettingsStoreTests.swift; sourceTree = "<group>"; };
 		B93A81B66AD9B6F786437DF8 /* PowerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerSettings.swift; sourceTree = "<group>"; };
 		CCFBFE6544476A66A94CC016 /* PowerFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerFormatterTests.swift; sourceTree = "<group>"; };
@@ -97,6 +103,8 @@
 		15D233B2B175C51330142114 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				1BA7ED50958EBE690B4A7F03 /* AppEnergyMonitor.swift */,
+				AF2DCEF5CF80530484E88C86 /* AppIconCache.swift */,
 				ACC56CACD56035A4C7FD1D82 /* BatteryRatePolarityStore.swift */,
 				334759A28F9BD6CA2CA6D280 /* HIDTemperatureReader.swift */,
 				99C20DECD7138D6728A4760C /* IORegistryReader.swift */,
@@ -167,6 +175,7 @@
 		ADD0E6EAE3F210848143518E /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				13BB9D8684B714FB707E93E6 /* PopoverViewState.swift */,
 				B93A81B66AD9B6F786437DF8 /* PowerSettings.swift */,
 				38CA7EE7C2B2D533ED8D6B58 /* PowerSnapshot.swift */,
 			);
@@ -277,11 +286,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				57689C6F8D03DB7706A70C7D /* AppDelegate.swift in Sources */,
+				9509DDF2257B4D231BA20C69 /* AppEnergyMonitor.swift in Sources */,
+				ED99BCC2B5D26FE4AFC8CDC8 /* AppIconCache.swift in Sources */,
 				B5CF80317863A2142C456302 /* AppState.swift in Sources */,
 				A79750F8A7999532F6C5EF55 /* BatteryRatePolarityStore.swift in Sources */,
 				24D1FC605F12A7A9E10FC890 /* HIDTemperatureReader.swift in Sources */,
 				CA4E59A067CC41CFD2ACC21F /* IORegistryReader.swift in Sources */,
 				13F6379A68BC0583C8623E89 /* LaunchAtLoginManager.swift in Sources */,
+				9576DD0528AC0C05EA47E805 /* PopoverViewState.swift in Sources */,
 				D8290B7E752424543CA1D42D /* PowerDataProvider.swift in Sources */,
 				0DB13B99DD88BE9584C1BECB /* PowerFormatter.swift in Sources */,
 				DA1DEB4DDD4A9F2EB4BB91CC /* PowerMonitor.swift in Sources */,

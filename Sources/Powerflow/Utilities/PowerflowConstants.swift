@@ -54,6 +54,21 @@ enum PowerflowConstants {
     /// Background update interval when popover is not visible.
     static let backgroundUpdateInterval: TimeInterval = 10.0
 
+    /// Refresh interval for background app offender sampling.
+    static let appEnergySummaryRefreshInterval: TimeInterval = 10.0
+
+    /// Refresh interval for popover/full-detail app offender sampling.
+    static let appEnergyFullRefreshInterval: TimeInterval = 5.0
+
+    /// Number of recent app offenders to surface in the UI.
+    static let appEnergyOffenderLimit: Int = 4
+
+    /// Minimum per-process impact required to contribute to an app group.
+    static let minimumAppEnergyContributorImpact: Double = 0.2
+
+    /// Minimum impact score to surface an offender row.
+    static let minimumAppEnergyImpact: Double = 1.0
+
     /// Summary CPU temperature refresh interval.
     static let summaryCpuTempRefreshInterval: TimeInterval = 30
 

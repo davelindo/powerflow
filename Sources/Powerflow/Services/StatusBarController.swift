@@ -156,8 +156,10 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     private func ensurePopoverContent() {
         guard popover.contentViewController == nil else { return }
         popover.contentViewController = NSHostingController(
-            rootView: StatusPopoverView()
-                .environmentObject(appState)
+            rootView: StatusPopoverView(
+                appState: appState,
+                popoverStore: appState.popoverStore
+            )
         )
     }
 

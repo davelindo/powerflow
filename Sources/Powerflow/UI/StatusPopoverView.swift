@@ -2,8 +2,17 @@ import AppKit
 import SwiftUI
 
 struct StatusPopoverView: View {
-    @EnvironmentObject private var appState: AppState
+    @ObservedObject private var popoverStore: PopoverStateStore
     @State private var showingSettings = false
+    private let appState: AppState
+
+    init(
+        appState: AppState = .shared,
+        popoverStore: PopoverStateStore? = nil
+    ) {
+        self.appState = appState
+        _popoverStore = ObservedObject(wrappedValue: popoverStore ?? appState.popoverStore)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,16 +75,14 @@ struct StatusPopoverView: View {
         }
     }
 
+    @ViewBuilder
     private var mainSections: some View {
+        let popoverState = popoverStore.state
+
         Group {
-            OverviewSection(
-                snapshot: appState.snapshot,
-                settings: appState.settings
-            )
-
-            FlowSection(snapshot: appState.snapshot)
-
-            HistorySection(history: appState.history)
+            OverviewSection(state: popoverState.overview)
+            FlowSection(state: popoverState.flow)
+            HistorySection(state: popoverState.history)
         }
     }
 
@@ -85,66 +92,31 @@ struct StatusPopoverView: View {
 }
 
 private struct OverviewSection: View {
-    let snapshot: PowerSnapshot
-    let settings: PowerSettings
+    let state: PopoverOverviewState
 
     private var appearance: PowerStateAppearance {
-        PowerStateAppearance(snapshot: snapshot)
-    }
-
-    private var powerLabel: String {
-        if snapshot.isOnExternalPower && settings.showChargingPower {
-            return "Input"
-        }
-
-        switch settings.statusBarItem {
-        case .system:
-            return "System Load"
-        case .screen:
-            return "Screen"
-        case .heatpipe:
-            return snapshot.packagePowerLabel
-        }
-    }
-
-    private var sourceSummary: String {
-        if snapshot.isChargingActive {
-            if snapshot.adapterWatts > 0 {
-                return "\(PowerFormatter.wattsString(snapshot.adapterWatts)) adapter"
-            }
-            return "External power"
-        }
-
-        if snapshot.isExternalPowerConnected {
-            return "External power"
-        }
-
-        return "Battery"
+        PowerStateAppearance(kind: state.powerState)
     }
 
     var body: some View {
-        let displayPowerValue = PowerFormatter.displayPowerValue(snapshot: snapshot, settings: settings)
-        let displayPowerText = displayPowerValue.map(PowerFormatter.wattsString) ?? "--"
-        let details = overviewDetails
-
         CardContainer(padding: 12) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(powerLabel)
+                        Text(state.powerLabel)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
 
-                        Text(displayPowerText)
+                        Text(state.displayPowerText)
                             .font(.system(size: 34, weight: .semibold, design: .rounded))
                             .monospacedDigit()
-                            .accessibilityLabel("\(powerLabel): \(displayPowerText)")
+                            .accessibilityLabel("\(state.powerLabel): \(state.displayPowerText)")
                     }
 
                     Spacer(minLength: 8)
 
                     VStack(alignment: .trailing, spacing: 6) {
-                        Text("\(snapshot.batteryLevel)%")
+                        Text(state.batteryLevelText)
                             .font(.system(size: 24, weight: .semibold, design: .rounded))
                             .monospacedDigit()
                             .foregroundStyle(.primary)
@@ -153,91 +125,41 @@ private struct OverviewSection: View {
                     }
                 }
 
-                PopoverInfoGroup {
-                    ForEach(Array(details.enumerated()), id: \.element.id) { index, detail in
-                        PopoverInfoRow(detail.title) {
-                            PopoverValueText(detail.value)
-                        }
-
-                        if index < details.count - 1 {
-                            Divider()
-                        }
-                    }
+                if !state.metrics.isEmpty {
+                    CompactOverviewMetricsRow(metrics: state.metrics)
                 }
             }
         }
     }
+}
 
-    private static let hourMinuteFormatter: DateComponentsFormatter = {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.hour, .minute]
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }()
+private struct CompactOverviewMetricsRow: View {
+    let metrics: [PopoverOverviewMetric]
 
-    private static let minuteFormatter: DateComponentsFormatter = {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.minute]
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }()
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(metric.title)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
 
-    private static func formatMinutes(_ minutes: Int) -> String {
-        let formatter = minutes >= 60 ? hourMinuteFormatter : minuteFormatter
-        return formatter.string(from: TimeInterval(minutes * 60)) ?? "\(minutes) min"
-    }
+                    Text(metric.value)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-    private struct OverviewDetail: Identifiable {
-        let id: String
-        let title: String
-        let value: String
-    }
-
-    private var overviewDetails: [OverviewDetail] {
-        var details: [OverviewDetail] = [
-            OverviewDetail(id: "source", title: "Source", value: sourceSummary)
-        ]
-
-        if let minutes = snapshot.timeRemainingMinutes {
-            details.append(
-                OverviewDetail(
-                    id: "time",
-                    title: "Time",
-                    value: Self.formatMinutes(minutes)
-                )
-            )
+                if index < metrics.count - 1 {
+                    Divider()
+                        .frame(height: 24)
+                }
+            }
         }
-
-        if let health = snapshot.batteryHealthPercent {
-            details.append(
-                OverviewDetail(
-                    id: "health",
-                    title: "Health",
-                    value: String(format: "%.0f%%", health)
-                )
-            )
-        }
-
-        if let remainingWh = snapshot.batteryRemainingWh {
-            details.append(
-                OverviewDetail(
-                    id: "remaining",
-                    title: "Remaining",
-                    value: String(format: "%.1f Wh", remainingWh)
-                )
-            )
-        }
-
-        if let batteryTemp = snapshot.batteryTemperatureC, batteryTemp > 0 {
-            details.append(
-                OverviewDetail(
-                    id: "battery-temp",
-                    title: "Temperature",
-                    value: String(format: "%.1f C", batteryTemp)
-                )
-            )
-        }
-
-        return details
+        .padding(.horizontal, 2)
+        .padding(.vertical, 2)
     }
 }

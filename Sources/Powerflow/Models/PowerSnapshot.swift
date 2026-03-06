@@ -51,6 +51,20 @@ struct PowerDiagnostics: Equatable {
     static let empty = PowerDiagnostics(smc: .empty, telemetry: nil)
 }
 
+struct AppEnergyOffender: Equatable, Identifiable {
+    let groupID: String
+    let primaryPID: Int32
+    let name: String
+    let iconPath: String?
+    let processCount: Int
+    let impactScore: Double
+    let cpuPercent: Double
+    let memoryBytes: UInt64
+    let pageinsPerSecond: Double
+
+    var id: String { groupID }
+}
+
 struct PowerSnapshot: Equatable {
     var timestamp: Date
     var isCharging: Bool
@@ -91,6 +105,7 @@ struct PowerSnapshot: Equatable {
     var processThermalState: ProcessInfo.ThermalState?
     var isLowPowerModeEnabled: Bool
     var thermalPressure: ThermalPressure?
+    var appEnergyOffenders: [AppEnergyOffender]
     var diagnostics: PowerDiagnostics
 
     static let empty = PowerSnapshot(
@@ -133,6 +148,7 @@ struct PowerSnapshot: Equatable {
         processThermalState: nil,
         isLowPowerModeEnabled: false,
         thermalPressure: nil,
+        appEnergyOffenders: [],
         diagnostics: .empty
     )
 }

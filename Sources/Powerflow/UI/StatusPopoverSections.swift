@@ -6,16 +6,17 @@ struct PowerStateAppearance {
     let systemImage: String
     let tint: Color
 
-    init(snapshot: PowerSnapshot) {
-        if snapshot.isChargingActive {
+    init(kind: PowerStateKind) {
+        switch kind {
+        case .charging:
             label = "Charging"
             systemImage = "bolt.fill"
             tint = Color(nsColor: .systemGreen)
-        } else if snapshot.isExternalPowerConnected {
+        case .externalPower:
             label = "External Power"
             systemImage = "powerplug.fill"
             tint = Color(nsColor: .systemBlue)
-        } else {
+        case .onBattery:
             label = "On Battery"
             systemImage = "battery.25"
             tint = Color(nsColor: .systemOrange)
@@ -24,7 +25,7 @@ struct PowerStateAppearance {
 }
 
 struct FlowSection: View {
-    let snapshot: PowerSnapshot
+    let state: PopoverFlowState
     @State private var showBreakdown = false
 
     var body: some View {
@@ -36,14 +37,14 @@ struct FlowSection: View {
                 )
 
                 PopoverInfoGroup {
-                    PowerFlowView(snapshot: snapshot)
+                    PowerFlowView(state: state)
                         .frame(height: 158)
                         .padding(.vertical, 8)
 
                     Divider()
 
                     DisclosureGroup(isExpanded: $showBreakdown) {
-                        ConsumptionCard(snapshot: snapshot)
+                        ConsumptionCard(snapshot: state.snapshot)
                             .padding(.top, 6)
                             .padding(.bottom, 8)
                     } label: {
@@ -59,12 +60,12 @@ struct FlowSection: View {
 }
 
 struct HistorySection: View {
-    let history: [PowerHistoryPoint]
+    let state: PopoverHistoryState
     @Environment(\.colorScheme) private var colorScheme
     @State private var focus: HistoryFocus = .system
 
     private enum HistoryFocus: String, CaseIterable, Identifiable {
-        case system = "Power"
+        case system = "System Load"
         case thermal = "Thermal"
         case adapter = "Adapter"
 
@@ -89,7 +90,7 @@ struct HistorySection: View {
                         }
                         .labelsHidden()
                         .pickerStyle(.menu)
-                        .frame(width: 120)
+                        .frame(width: 140)
                     }
 
                     Divider()
@@ -103,69 +104,20 @@ struct HistorySection: View {
 
     @ViewBuilder
     private func historyContent(palette: PowerflowPalette) -> some View {
-        if history.count < 2 {
+        if !state.hasEnoughSamples {
             emptyState("Collecting samples…")
-        } else {
-            let systemSeries = history.map { $0.systemLoad }
-            let inputSeries = history.map { $0.inputPower }
-            let temperatureSeries = history.map { $0.temperatureC }
-            let fanSeries = history.map { $0.fanPercentMax ?? 0 }
-            let hasFan = fanSeries.contains { $0 > 0.1 }
+        } else if let chart = selectedChart {
+            VStack(alignment: .leading, spacing: 12) {
+                HistoryChartCard(model: chart, palette: palette)
 
-            switch focus {
-            case .system:
-                if !systemSeries.contains(where: { $0 > 0.05 }) {
-                    emptyState("No power data yet.")
-                } else {
-                    HistoryChartCard(
-                        title: "System Load",
-                        values: systemSeries,
-                        color: palette.system,
-                        formatter: PowerFormatter.wattsString,
-                        secondaryValues: hasFan ? fanSeries : nil,
-                        secondaryColor: palette.fan,
-                        secondaryFormatter: formatFan,
-                        secondaryLabel: "Fan %"
-                    )
-                }
-            case .thermal:
-                if !temperatureSeries.contains(where: { $0 > 0.05 }) {
-                    emptyState("No thermal data yet.")
-                } else {
-                    HistoryChartCard(
-                        title: "Primary Temp",
-                        values: temperatureSeries,
-                        color: palette.temperature,
-                        height: 90,
-                        formatter: formatTemp,
-                        secondaryValues: hasFan ? fanSeries : nil,
-                        secondaryColor: palette.fan,
-                        secondaryFormatter: formatFan,
-                        secondaryLabel: "Fan %"
-                    )
-                }
-            case .adapter:
-                if !inputSeries.contains(where: { $0 > 0.05 }) {
-                    emptyState("No adapter data yet.")
-                } else {
-                    HistoryChartCard(
-                        title: "Adapter In",
-                        values: inputSeries,
-                        color: palette.adapter,
-                        height: 90,
-                        formatter: PowerFormatter.wattsString
-                    )
+                if focus == .system {
+                    Divider()
+                    AppEnergyOffendersView(offenders: state.offenders)
                 }
             }
+        } else {
+            emptyState(emptyMessage)
         }
-    }
-
-    private func formatTemp(_ value: Double) -> String {
-        String(format: "%.1f C", value)
-    }
-
-    private func formatFan(_ value: Double) -> String {
-        String(format: "%.0f%%", value)
     }
 
     private func emptyState(_ message: String) -> some View {
@@ -177,6 +129,111 @@ struct HistorySection: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var selectedChart: PopoverHistoryChartState? {
+        switch focus {
+        case .system:
+            return state.systemChart
+        case .thermal:
+            return state.thermalChart
+        case .adapter:
+            return state.adapterChart
+        }
+    }
+
+    private var emptyMessage: String {
+        switch focus {
+        case .system:
+            return "No power data yet."
+        case .thermal:
+            return "No thermal data yet."
+        case .adapter:
+            return "No adapter data yet."
+        }
+    }
+}
+
+struct AppEnergyOffendersView: View {
+    let offenders: [PopoverOffenderRowState]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Recent Offenders")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("Impact")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.tertiary)
+            }
+
+            if offenders.isEmpty {
+                Text("No standout app activity.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(offenders.enumerated()), id: \.element.id) { index, offender in
+                    AppEnergyOffenderRow(offender: offender)
+
+                    if index < offenders.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct AppEnergyOffenderRow: View {
+    let offender: PopoverOffenderRowState
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            AppEnergyOffenderIconView(offender: offender)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(offender.name)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(offender.detailText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(offender.impactText)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.primary)
+                .monospacedDigit()
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct AppEnergyOffenderIconView: View {
+    let offender: PopoverOffenderRowState
+
+    var body: some View {
+        Group {
+            if let iconImage = AppIconCache.shared.cachedImage(for: offender.iconPath) {
+                Image(nsImage: iconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Image(systemName: "app.dashed")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 18, height: 18)
     }
 }
 
@@ -237,47 +294,29 @@ struct PopoverValueText: View {
 }
 
 struct HistoryChartCard: View {
-    let title: String
-    let values: [Double]
-    let color: Color
-    var height: CGFloat = 90
-    var formatter: (Double) -> String = { String(format: "%.1f", $0) }
-    var skipZerosForStats: Bool = true
-    var secondaryValues: [Double]? = nil
-    var secondaryColor: Color = .secondary
-    var secondaryFormatter: (Double) -> String = { String(format: "%.0f", $0) }
-    var secondaryLabel: String? = nil
+    let model: PopoverHistoryChartState
+    let palette: PowerflowPalette
 
     var body: some View {
-        let maxSamples = 240
-        let primaryValues = truncatedValues(values, maxSamples: maxSamples)
-        let secondarySeries = secondaryValues.map { truncatedValues($0, maxSamples: maxSamples) }
-        let statsValues = filteredStatsValues(primaryValues)
-        let minVal = statsValues.min()
-        let maxVal = statsValues.max()
-        let latestVal = primaryValues.last ?? 0
-        let secondaryStats = secondaryStatsValues(secondarySeries)
-        let secondaryMin = secondaryStats?.min()
-        let secondaryMax = secondaryStats?.max()
-
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(title)
+                Text(model.title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(formatter(latestVal))
+                Text(model.latestValueText)
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(color)
+                    .foregroundStyle(primaryColor)
             }
 
             PowerSparkline(
-                values: primaryValues,
-                tint: color,
-                secondaryValues: secondarySeries,
-                secondaryTint: secondaryColor
+                values: model.primaryValues,
+                tint: primaryColor,
+                secondaryValues: model.secondaryValues,
+                secondaryTint: palette.fan,
+                cacheKey: model.cacheKey
             )
-            .frame(height: height)
+            .frame(height: model.height)
             .padding(.vertical, 4)
             .padding(.horizontal, 2)
             .background(
@@ -286,30 +325,16 @@ struct HistoryChartCard: View {
             )
 
             HStack(spacing: 12) {
-                chartStat(label: "Min", value: minVal.map(formatter) ?? "--")
-                chartStat(label: "Max", value: maxVal.map(formatter) ?? "--")
-                chartStat(label: "Now", value: formatter(latestVal))
+                chartStat(label: "Min", value: model.minValueText)
+                chartStat(label: "Max", value: model.maxValueText)
+                chartStat(label: "Now", value: model.latestValueText)
             }
 
-            if let secondaryMin, let secondaryMax, let secondaryLabel {
-                chartStat(label: secondaryLabel, value: "\(secondaryFormatter(secondaryMin))–\(secondaryFormatter(secondaryMax))")
+            if let secondaryRangeText = model.secondaryRangeText,
+               let secondaryLabel = model.secondaryLabel {
+                chartStat(label: secondaryLabel, value: secondaryRangeText)
             }
         }
-    }
-
-    private func filteredStatsValues(_ values: [Double]) -> [Double] {
-        let filtered = skipZerosForStats ? values.filter { $0 > 0.01 } : values
-        return filtered.isEmpty ? values : filtered
-    }
-
-    private func secondaryStatsValues(_ values: [Double]?) -> [Double]? {
-        guard let values else { return nil }
-        let filtered = values.filter { $0 > 0.1 }
-        return filtered.isEmpty ? nil : filtered
-    }
-
-    private func truncatedValues(_ values: [Double], maxSamples: Int) -> [Double] {
-        values.count > maxSamples ? Array(values.suffix(maxSamples)) : values
     }
 
     private func chartStat(label: String, value: String) -> some View {
@@ -323,6 +348,17 @@ struct HistoryChartCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    private var primaryColor: Color {
+        switch model.style {
+        case .system:
+            return palette.system
+        case .thermal:
+            return palette.temperature
+        case .adapter:
+            return palette.adapter
+        }
+    }
 }
 
 struct PowerSparkline: View {
@@ -330,22 +366,23 @@ struct PowerSparkline: View {
     let tint: Color
     var secondaryValues: [Double]? = nil
     var secondaryTint: Color = .secondary
+    let cacheKey: String
 
     var body: some View {
         GeometryReader { proxy in
             let w = max(proxy.size.width, 1)
             let h = max(proxy.size.height, 1)
-            let maxSamples = 240
-            let primaryValues = values.count > maxSamples ? Array(values.suffix(maxSamples)) : values
-            let clampedSecondaryValues = secondaryValues.map { values in
-                values.count > maxSamples ? Array(values.suffix(maxSamples)) : values
-            }
-            let target = max(2, min(Int(w.rounded(.down)), maxSamples))
-            let points = downsample(values: primaryValues, target: target)
-            let maxVal = max(points.max() ?? 1.0, 1.0) * 1.1
+            let cachedPoints = SparklinePointCache.shared.points(
+                values: values,
+                secondaryValues: secondaryValues,
+                cacheKey: cacheKey,
+                width: w
+            )
+            let points = cachedPoints.primary
+            let maxVal = max(cachedPoints.primaryMax ?? 1.0, 1.0) * 1.1
             let minVal = 0.0
             let range = max(maxVal - minVal, 0.001)
-            let secondaryPoints = clampedSecondaryValues.map { downsample(values: $0, target: target) }
+            let secondaryPoints = cachedPoints.secondary
             let secondaryRange = 100.0
 
             ZStack {
@@ -406,6 +443,39 @@ struct PowerSparkline: View {
                 }
             }
         }
+    }
+}
+
+private final class SparklinePointCache {
+    static let shared = SparklinePointCache()
+
+    struct CachedPoints {
+        let primary: [Double]
+        let primaryMax: Double?
+        let secondary: [Double]?
+    }
+
+    private var entries: [String: CachedPoints] = [:]
+
+    func points(
+        values: [Double],
+        secondaryValues: [Double]?,
+        cacheKey: String,
+        width: CGFloat
+    ) -> CachedPoints {
+        let maxSamples = 240
+        let widthBucket = max(Int((width / 8).rounded(.down)) * 8, 8)
+        let cacheID = "\(cacheKey)-\(widthBucket)"
+        if let cached = entries[cacheID] {
+            return cached
+        }
+
+        let target = max(2, min(widthBucket, maxSamples))
+        let primary = downsample(values: values, target: target)
+        let secondary = secondaryValues.map { downsample(values: $0, target: target) }
+        let cached = CachedPoints(primary: primary, primaryMax: primary.max(), secondary: secondary)
+        entries[cacheID] = cached
+        return cached
     }
 
     private func downsample(values: [Double], target: Int) -> [Double] {
@@ -600,14 +670,16 @@ struct FooterActionButton: View {
 }
 
 struct PowerFlowView: View {
-    let snapshot: PowerSnapshot
-    @EnvironmentObject private var appState: AppState
+    let state: PopoverFlowState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
+    private let animationTick: TimeInterval = 1.0 / 6.0
+    private let animationDuration: Double = 10.0
+
     var body: some View {
-        let flow = FlowDiagramState(snapshot: snapshot)
-        let shouldAnimate = appState.isPopoverVisible && !reduceMotion
+        let flow = state.diagram
+        let shouldAnimate = flow.hasActiveFlow && !reduceMotion
         let palette = PowerflowPalette(colorScheme: colorScheme)
         let batteryEndpointValue: Double? = flow.batteryActive ? nil : flow.batteryValue
         let systemEndpointValue: Double? = flow.showJunctionToSystem ? nil : flow.systemValue
@@ -627,173 +699,156 @@ struct PowerFlowView: View {
             let batteryFrom = batteryCharging ? junctionPoint : batteryPoint
             let batteryTo = batteryCharging ? batteryPoint : junctionPoint
             let batteryIconImage = BatteryIconRenderer.dynamicBatteryImage(
-                level: snapshot.batteryLevelPrecise,
-                overlay: batteryCharging ? .charging : .none
+                level: state.batteryLevelPrecise,
+                overlay: state.batteryOverlay
             )
 
-            ZStack {
-                FlowConnection(
-                    from: adapterPoint,
-                    to: junctionPoint,
-                    value: flow.adapterToJunction,
-                    color: palette.adapter,
-                    isActive: flow.showAdapterToJunction,
-                    shouldAnimate: shouldAnimate,
-                    canvasSize: size
-                )
-
-                FlowConnection(
-                    from: junctionPoint,
-                    to: systemPoint,
-                    value: flow.junctionToSystem,
-                    color: palette.system,
-                    isActive: flow.showJunctionToSystem,
-                    shouldAnimate: shouldAnimate,
-                    canvasSize: size
-                )
-
-                FlowConnection(
-                    from: batteryFrom,
-                    to: batteryTo,
-                    value: batteryFlowValue,
-                    color: batteryFlowColor,
-                    isActive: batteryFlowActive,
-                    shouldAnimate: shouldAnimate,
-                    canvasSize: size
-                )
-
-                FlowJunction()
-                    .position(junctionPoint)
-
-                FlowEndpoint(
-                    icon: "powerplug.fill",
-                    iconImage: nil,
-                    label: "Adapter",
-                    value: flow.adapterValue,
-                    valueNote: "Capacity",
-                    color: palette.adapter,
-                    isActive: flow.adapterActive,
-                    helpText: nil,
-                    layout: .stacked
-                )
-                .position(adapterPoint)
-
-                FlowEndpoint(
-                    icon: "battery.100",
-                    iconImage: batteryIconImage,
-                    label: "Battery",
-                    value: batteryEndpointValue,
-                    valueNote: nil,
-                    color: batteryFlowColor,
-                    isActive: true,
-                    helpText: nil,
-                    layout: .stacked
-                )
-                .position(batteryPoint)
-
-                FlowEndpoint(
-                    icon: "macbook.gen2",
-                    iconImage: nil,
-                    label: "System",
-                    value: systemEndpointValue,
-                    valueNote: nil,
-                    color: .primary,
-                    isActive: true,
-                    helpText: nil,
-                    layout: .stacked
-                )
-                .position(systemPoint)
+            Group {
+                if shouldAnimate {
+                    TimelineView(.periodic(from: .now, by: animationTick)) { context in
+                        flowDiagram(
+                            size: size,
+                            flow: flow,
+                            palette: palette,
+                            adapterPoint: adapterPoint,
+                            junctionPoint: junctionPoint,
+                            systemPoint: systemPoint,
+                            batteryPoint: batteryPoint,
+                            batteryFrom: batteryFrom,
+                            batteryTo: batteryTo,
+                            batteryFlowValue: batteryFlowValue,
+                            batteryFlowActive: batteryFlowActive,
+                            batteryFlowColor: batteryFlowColor,
+                            batteryEndpointValue: batteryEndpointValue,
+                            systemEndpointValue: systemEndpointValue,
+                            batteryIconImage: batteryIconImage,
+                            animationPhase: dashPhase(for: context.date)
+                        )
+                    }
+                } else {
+                    flowDiagram(
+                        size: size,
+                        flow: flow,
+                        palette: palette,
+                        adapterPoint: adapterPoint,
+                        junctionPoint: junctionPoint,
+                        systemPoint: systemPoint,
+                        batteryPoint: batteryPoint,
+                        batteryFrom: batteryFrom,
+                        batteryTo: batteryTo,
+                        batteryFlowValue: batteryFlowValue,
+                        batteryFlowActive: batteryFlowActive,
+                        batteryFlowColor: batteryFlowColor,
+                        batteryEndpointValue: batteryEndpointValue,
+                        systemEndpointValue: systemEndpointValue,
+                        batteryIconImage: batteryIconImage,
+                        animationPhase: nil
+                    )
+                }
             }
         }
         .frame(height: 166)
         .padding(.horizontal, 12)
     }
-}
 
-struct FlowDiagramState {
-    let adapterActive: Bool
-    let systemValue: Double
-    let adapterValue: Double?
-    let batteryValue: Double?
-    let adapterToJunction: Double
-    let junctionToSystem: Double
-    let junctionToBattery: Double
-    let batteryToJunction: Double
-    let batteryCharging: Bool
-    let batteryMagnitude: Double
-    let batteryActive: Bool
+    private func flowDiagram(
+        size: CGSize,
+        flow: FlowDiagramState,
+        palette: PowerflowPalette,
+        adapterPoint: CGPoint,
+        junctionPoint: CGPoint,
+        systemPoint: CGPoint,
+        batteryPoint: CGPoint,
+        batteryFrom: CGPoint,
+        batteryTo: CGPoint,
+        batteryFlowValue: Double,
+        batteryFlowActive: Bool,
+        batteryFlowColor: Color,
+        batteryEndpointValue: Double?,
+        systemEndpointValue: Double?,
+        batteryIconImage: NSImage?,
+        animationPhase: CGFloat?
+    ) -> some View {
+        ZStack {
+            FlowConnection(
+                from: adapterPoint,
+                to: junctionPoint,
+                value: flow.adapterToJunction,
+                color: palette.adapter,
+                isActive: flow.showAdapterToJunction,
+                animationPhase: animationPhase,
+                canvasSize: size
+            )
 
-    init(snapshot: PowerSnapshot) {
-        let systemLoad = max(snapshot.systemLoad, 0)
-        let systemIn = max(snapshot.systemIn, 0)
-        let adapterPresent = snapshot.adapterWatts > 0 || systemIn > 0.05
+            FlowConnection(
+                from: junctionPoint,
+                to: systemPoint,
+                value: flow.junctionToSystem,
+                color: palette.system,
+                isActive: flow.showJunctionToSystem,
+                animationPhase: animationPhase,
+                canvasSize: size
+            )
 
-        adapterActive = adapterPresent
-        systemValue = systemLoad
-        if adapterPresent {
-            adapterValue = snapshot.adapterWatts > 0 ? snapshot.adapterWatts : systemIn
-        } else {
-            adapterValue = nil
+            FlowConnection(
+                from: batteryFrom,
+                to: batteryTo,
+                value: batteryFlowValue,
+                color: batteryFlowColor,
+                isActive: batteryFlowActive,
+                animationPhase: animationPhase,
+                canvasSize: size
+            )
+
+            FlowJunction()
+                .position(junctionPoint)
+
+            FlowEndpoint(
+                icon: "powerplug.fill",
+                iconImage: nil,
+                label: "Adapter",
+                value: flow.adapterValue,
+                valueNote: "Capacity",
+                color: palette.adapter,
+                isActive: flow.adapterActive,
+                helpText: nil,
+                layout: .stacked
+            )
+            .position(adapterPoint)
+
+            FlowEndpoint(
+                icon: "battery.100",
+                iconImage: batteryIconImage,
+                label: "Battery",
+                value: batteryEndpointValue,
+                valueNote: nil,
+                color: batteryFlowColor,
+                isActive: true,
+                helpText: nil,
+                layout: .stacked
+            )
+            .position(batteryPoint)
+
+            FlowEndpoint(
+                icon: "macbook.gen2",
+                iconImage: nil,
+                label: "System",
+                value: systemEndpointValue,
+                valueNote: nil,
+                color: .primary,
+                isActive: true,
+                helpText: nil,
+                layout: .stacked
+            )
+            .position(systemPoint)
         }
-
-        adapterToJunction = systemIn
-        junctionToSystem = systemLoad
-        junctionToBattery = max(systemIn - systemLoad, 0)
-        batteryToJunction = max(systemLoad - systemIn, 0)
-
-        let batteryRate = snapshot.batteryPower
-        let batteryRateMagnitude = abs(batteryRate)
-        let threshold = 0.05
-        let netFlow = systemIn - systemLoad
-        let netMagnitude = abs(netFlow)
-        let netIsMeaningful = netMagnitude > 1.0
-        let allowedDiscrepancy = max(1.0, netMagnitude * 0.3)
-        let batteryRateReliable = batteryRateMagnitude > threshold
-            && (!netIsMeaningful || (batteryRate * netFlow >= 0
-                && abs(batteryRateMagnitude - netMagnitude) <= allowedDiscrepancy))
-
-        var charging = false
-        if batteryRateReliable {
-            charging = batteryRate > 0
-            if netIsMeaningful, batteryRate * netFlow < 0 {
-                charging = netFlow > 0
-            }
-        } else if netIsMeaningful {
-            charging = netFlow > 0
-        } else if snapshot.isChargingActive {
-            charging = true
-        } else {
-            charging = false
-        }
-        batteryCharging = charging
-
-        let magnitude: Double
-        if batteryRateReliable {
-            magnitude = batteryRateMagnitude
-        } else if netIsMeaningful {
-            magnitude = netMagnitude
-        } else {
-            magnitude = batteryRateMagnitude
-        }
-        batteryMagnitude = magnitude
-        batteryActive = magnitude > 0.05
-        batteryValue = batteryActive ? magnitude : nil
     }
 
-    var showAdapterToJunction: Bool {
-        adapterToJunction > 0.05
-    }
-
-    var showJunctionToSystem: Bool {
-        junctionToSystem > 0.05
-    }
-
-    var showJunctionToBattery: Bool {
-        junctionToBattery > 0.05
-    }
-
-    var showBatteryToJunction: Bool {
-        batteryToJunction > 0.05
+    private func dashPhase(for date: Date) -> CGFloat {
+        let dashCycle = CGFloat(17)
+        let progress = date.timeIntervalSinceReferenceDate / animationDuration
+        let phase = progress.truncatingRemainder(dividingBy: 1) * Double(dashCycle)
+        return -CGFloat(phase)
     }
 }
 
@@ -989,10 +1044,9 @@ struct FlowConnection: View {
     let value: Double
     let color: Color
     let isActive: Bool
-    let shouldAnimate: Bool
+    let animationPhase: CGFloat?
     let canvasSize: CGSize
     private let dashPattern: [CGFloat] = [3, 14]
-    private let animationDuration: Double = 6.4
 
     var body: some View {
         let mid = CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2)
@@ -1011,20 +1065,17 @@ struct FlowConnection: View {
                 )
 
             if isActive {
-                if shouldAnimate {
-                    TimelineView(.periodic(from: .now, by: animationTick)) { context in
-                        let phase = dashPhase(for: context.date)
-                        path
-                            .stroke(
-                                color.opacity(0.4),
-                                style: StrokeStyle(
-                                    lineWidth: 2,
-                                    lineCap: .round,
-                                    dash: dashPattern,
-                                    dashPhase: phase
-                                )
+                if let animationPhase {
+                    path
+                        .stroke(
+                            color.opacity(0.4),
+                            style: StrokeStyle(
+                                lineWidth: 2,
+                                lineCap: .round,
+                                dash: dashPattern,
+                                dashPhase: animationPhase
                             )
-                    }
+                        )
                 } else {
                     path
                         .stroke(
@@ -1041,24 +1092,6 @@ struct FlowConnection: View {
             }
         }
         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
-    }
-
-    private var dashCycle: CGFloat {
-        dashPattern.reduce(0, +)
-    }
-
-    private var animationTick: TimeInterval {
-        let refreshRate = Double(NSScreen.main?.maximumFramesPerSecond ?? 60)
-        let halfRate = refreshRate * 0.5
-        let clamped = min(max(halfRate, 24), 60)
-        return 1.0 / clamped
-    }
-
-    private func dashPhase(for date: Date) -> CGFloat {
-        guard dashCycle > 0 else { return 0 }
-        let progress = date.timeIntervalSinceReferenceDate / animationDuration
-        let phase = progress.truncatingRemainder(dividingBy: 1) * Double(dashCycle)
-        return -CGFloat(phase)
     }
 
     private func pillOffset(from start: CGPoint, to end: CGPoint) -> CGPoint {
@@ -1119,7 +1152,6 @@ struct PowerflowPalette {
 struct StatusPopoverView_Previews: PreviewProvider {
     static var previews: some View {
         StatusPopoverView()
-            .environmentObject(AppState.shared)
             .padding()
             .background(Color.blue)
     }

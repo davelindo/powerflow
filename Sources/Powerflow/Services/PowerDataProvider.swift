@@ -12,6 +12,7 @@ protocol PowerDataProvider {
 final class MacPowerDataProvider: PowerDataProvider {
     private let ioReader = IORegistryReader()
     private let smcReader: SMCReader
+    private let appEnergyMonitor = AppEnergyMonitor()
     private let thermalReader = ThermalPressureReader()
     private let hidTemperatureReader = HIDTemperatureReader()
     private let powerSourceReader = PowerSourceReader()
@@ -129,6 +130,7 @@ final class MacPowerDataProvider: PowerDataProvider {
         let batteryTemperatureC = smc.hasTemperature && smc.temperature > 0 ? smc.temperature : nil
         let batteryCellVoltages = resolveBatteryCellVoltages(smc: smc, batteryInfo: batteryInfo)
         let processInfo = ProcessInfo.processInfo
+        let appEnergyOffenders = appEnergyMonitor.sample(detailLevel: detailLevel)
 
         return PowerSnapshot(
             timestamp: Date(),
@@ -170,6 +172,7 @@ final class MacPowerDataProvider: PowerDataProvider {
             processThermalState: processInfo.thermalState,
             isLowPowerModeEnabled: processInfo.isLowPowerModeEnabled,
             thermalPressure: thermalPressure,
+            appEnergyOffenders: appEnergyOffenders,
             diagnostics: PowerDiagnostics(smc: smc, telemetry: telemetry)
         )
     }
