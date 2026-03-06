@@ -14,11 +14,10 @@ jobs:
       - name: Xcode version
         run: xcodebuild -version
 
-      - name: Build
+      - name: Test
         run: |
           xcodebuild \
             -project Powerflow.xcodeproj \
             -scheme Powerflow \
-            -configuration Release \
             -destination "platform=macOS" \
-            build
+            test

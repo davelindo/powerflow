@@ -1,37 +1,5 @@
 import Foundation
 
-enum SMCSwitchState: String, Equatable {
-    case enabled
-    case disabled
-    case unknown
-
-    var label: String {
-        switch self {
-        case .enabled:
-            return "Enabled"
-        case .disabled:
-            return "Disabled"
-        case .unknown:
-            return "Unknown"
-        }
-    }
-}
-
-struct SMCControlState: Equatable {
-    var state: SMCSwitchState
-    var key: String?
-    var rawHex: String?
-
-    var displayValue: String {
-        let stateLabel = state.label
-        guard let key else { return stateLabel }
-        if let rawHex {
-            return "\(stateLabel) (\(key) 0x\(rawHex))"
-        }
-        return "\(stateLabel) (\(key))"
-    }
-}
-
 struct SMCFanReading: Equatable, Identifiable {
     var index: Int
     var rpm: Double
@@ -103,8 +71,6 @@ struct SMCPowerData: Equatable {
     var hasTimeToFull: Bool
     var hasTemperature: Bool
     var hasCpuTemperature: Bool
-    var chargingControl: SMCControlState
-    var dischargingControl: SMCControlState
     var fanReadings: [SMCFanReading]
 
     static let empty = SMCPowerData(
@@ -154,8 +120,6 @@ struct SMCPowerData: Equatable {
         hasTimeToFull: false,
         hasTemperature: false,
         hasCpuTemperature: false,
-        chargingControl: SMCControlState(state: .unknown, key: nil, rawHex: nil),
-        dischargingControl: SMCControlState(state: .unknown, key: nil, rawHex: nil),
         fanReadings: []
     )
 }
@@ -171,29 +135,24 @@ final class SMCReader {
     private let batteryVoltageKeys = ["B0AV", "SBAV"]
     private let batteryPercentKeys = ["SBAS", "BRSC"]
     private let batteryCapacityKeys = ["SBAR", "B0RM"]
-    private let cpuTempKeys = [
-        "Tp09", "Tp0T",
-        "Tp01", "Tp05", "Tp0D", "Tp0H", "Tp0L", "Tp0P", "Tp0X", "Tp0b",
+    // Deduplicated CPU temperature keys - discovered dynamically and cached
+    private let cpuTempKeys: [String] = Array(Set([
+        "Tp09", "Tp0T", "Tp01", "Tp05", "Tp0D", "Tp0H", "Tp0L", "Tp0P", "Tp0X", "Tp0b",
         "Tg05", "Tg0D", "Tg0L", "Tg0T",
         "TC10", "TC11", "TC12", "TC13",
         "TC20", "TC21", "TC22", "TC23",
         "TC30", "TC31", "TC32", "TC33",
         "TC40", "TC41", "TC42", "TC43",
         "TC50", "TC51", "TC52", "TC53",
-        "Tg04", "Tg05", "Tg0C", "Tg0D", "Tg0K", "Tg0L", "Tg0S", "Tg0T",
+        "Tg04", "Tg0C", "Tg0K", "Tg0S",
         "Tp1h", "Tp1t", "Tp1p", "Tp1l",
-        "Tp01", "Tp05", "Tp09", "Tp0D", "Tp0X", "Tp0b", "Tp0f", "Tp0j",
-        "Tg0f", "Tg0j",
-        "Te05", "Te0L", "Te0P", "Te0S",
+        "Tp0V", "Tp0Y", "Tp0e", "Tp0f", "Tp0j",
+        "Tg0f", "Tg0j", "Tg0G", "Tg0H", "Tg1U", "Tg1k", "Tg0d", "Tg0e", "Tg0k",
+        "Te05", "Te0L", "Te0P", "Te0S", "Te09", "Te0H",
         "Tf04", "Tf09", "Tf0A", "Tf0B", "Tf0D", "Tf0E",
         "Tf44", "Tf49", "Tf4A", "Tf4B", "Tf4D", "Tf4E",
         "Tf14", "Tf18", "Tf19", "Tf1A", "Tf24", "Tf28", "Tf29", "Tf2A",
-        "Te05", "Te0S", "Te09", "Te0H",
-        "Tp01", "Tp05", "Tp09", "Tp0D", "Tp0V", "Tp0Y", "Tp0b", "Tp0e",
-        "Tg0G", "Tg0H", "Tg1U", "Tg1k", "Tg0K", "Tg0L", "Tg0d", "Tg0e", "Tg0j", "Tg0k",
-    ]
-    private let chargeControlKeys = ["CHTE", "CH0B", "CH0C"]
-    private let dischargeControlKeys = ["CHIE", "CH0J", "CH0I"]
+    ]))
 
     private var connection: SMCConnection?
     private var preferredHeatpipeKey: String?
@@ -202,7 +161,7 @@ final class SMCReader {
     private var preferredCapacityKey: String?
     private var cachedCpuTempKeys: [String] = []
     private var didScanCpuTempKeys = false
-    private let cpuTempScanCooldown: TimeInterval = 30
+    private let cpuTempScanCooldown = PowerflowConstants.cpuTempScanCooldown
     private var lastCpuTempScanFailure: Date?
 
     init(cachedCpuTempKeys: [String] = []) {
@@ -412,7 +371,9 @@ final class SMCReader {
             data.hasTemperature = true
         }
 
-        for key in ["SBA1", "SBA2", "SBA3"] {
+        // Dynamically scan for battery cell voltages (supports 1-8 cells)
+        for cellIndex in 1...8 {
+            let key = "SBA\(cellIndex)"
             guard let value = connection.readKey(key)?.floatValue(), value > 0 else { continue }
             data.batteryCellVoltages.append(value)
             data.hasBatteryCellVoltages = true
@@ -423,8 +384,6 @@ final class SMCReader {
         }
 
         data.platformName = connection.readKey("RPlt")?.stringValue()
-        data.chargingControl = readChargingControlState(connection)
-        data.dischargingControl = readDischargingControlState(connection)
         data.fanReadings = readFanReadings(connection, includeDetails: true)
         if let cpuTemp = readCPUTemperature(connection, allowScan: true) {
             data.cpuTemperature = cpuTemp.value
@@ -457,31 +416,6 @@ final class SMCReader {
         return nil
     }
 
-    private func readChargingControlState(_ connection: SMCConnection) -> SMCControlState {
-        for key in chargeControlKeys {
-            guard let value = connection.readKey(key) else { continue }
-            let rawHex = rawHexString(for: value)
-            let state: SMCSwitchState
-            if key == "CHTE" {
-                state = parseTahoeChargeState(value)
-            } else {
-                state = parseLegacyChargeState(value)
-            }
-            return SMCControlState(state: state, key: key, rawHex: rawHex)
-        }
-        return SMCControlState(state: .unknown, key: nil, rawHex: nil)
-    }
-
-    private func readDischargingControlState(_ connection: SMCConnection) -> SMCControlState {
-        for key in dischargeControlKeys {
-            guard let value = connection.readKey(key) else { continue }
-            let rawHex = rawHexString(for: value)
-            let state = parseDischargeState(value)
-            return SMCControlState(state: state, key: key, rawHex: rawHex)
-        }
-        return SMCControlState(state: .unknown, key: nil, rawHex: nil)
-    }
-
     private func readFanReadings(
         _ connection: SMCConnection,
         includeDetails: Bool
@@ -491,10 +425,8 @@ final class SMCReader {
         let maxFans = min(count, 6)
         let indices = maxFans > 0 ? Array(0..<maxFans) : [0, 1]
         var readings: [SMCFanReading] = []
-        var seen = Set<Int>()
 
-        for index in indices where !seen.contains(index) {
-            seen.insert(index)
+        for index in indices {
             let key = "F\(index)Ac"
             guard let rpm = connection.readKey(key)?.floatValue(), rpm > 0 else { continue }
             let maxKey = "F\(index)Mx"
@@ -567,8 +499,13 @@ final class SMCReader {
             if !useCachedKeys {
                 discoveredKeys.append(key)
             }
-            if value > maxTemp, value < 150 {
-                maxTemp = value
+            // Normalize temperature: some keys report tenths of degrees
+            let normalizedValue = value > 1000 ? value / 10.0 : value
+            // Validate temperature is in reasonable range (0-150°C)
+            if normalizedValue > maxTemp,
+               normalizedValue > PowerflowConstants.minValidTemperature,
+               normalizedValue < PowerflowConstants.maxValidCpuTemperature {
+                maxTemp = normalizedValue
                 maxKey = key
             }
         }
@@ -585,39 +522,6 @@ final class SMCReader {
         }
 
         return maxTemp > 0 ? (maxTemp, maxKey) : nil
-    }
-
-
-    private func parseLegacyChargeState(_ value: SMCValue) -> SMCSwitchState {
-        guard let byte = value.bytes.first else { return .unknown }
-        switch byte {
-        case 0x00:
-            return .enabled
-        case 0x02:
-            return .disabled
-        default:
-            return .unknown
-        }
-    }
-
-    private func parseTahoeChargeState(_ value: SMCValue) -> SMCSwitchState {
-        let size = max(0, min(value.dataSize, value.bytes.count))
-        let slice = value.bytes.prefix(max(size, 4))
-        let allZero = slice.allSatisfy { $0 == 0 }
-        return allZero ? .enabled : .disabled
-    }
-
-    private func parseDischargeState(_ value: SMCValue) -> SMCSwitchState {
-        guard let byte = value.bytes.first else { return .unknown }
-        return byte == 0x00 ? .disabled : .enabled
-    }
-
-    private func rawHexString(for value: SMCValue) -> String? {
-        let size = max(0, min(value.dataSize, value.bytes.count))
-        guard size > 0 else { return nil }
-        return value.bytes.prefix(size)
-            .map { String(format: "%02X", $0) }
-            .joined()
     }
 
     private func getConnection() -> SMCConnection? {

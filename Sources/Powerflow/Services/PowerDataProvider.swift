@@ -62,10 +62,11 @@ final class MacPowerDataProvider: PowerDataProvider {
         }
     }
 
-    private static let summaryCpuTempRefreshInterval: TimeInterval = 30
-    private static let fullCpuTempRefreshInterval: TimeInterval = 5
-    private static let maxCachedCpuTempAge: TimeInterval = 120
-    private static let cpuTempPersistInterval: TimeInterval = 60
+    // Use centralized constants
+    private static let summaryCpuTempRefreshInterval = PowerflowConstants.summaryCpuTempRefreshInterval
+    private static let fullCpuTempRefreshInterval = PowerflowConstants.fullCpuTempRefreshInterval
+    private static let maxCachedCpuTempAge = PowerflowConstants.maxCachedCpuTempAge
+    private static let cpuTempPersistInterval = PowerflowConstants.cpuTempPersistInterval
 
     func readSnapshot(detailLevel: PowerSnapshotDetailLevel, settings: PowerSettings) -> PowerSnapshot {
         let smcHints = smcReadHints(for: settings, detailLevel: detailLevel)
@@ -74,10 +75,10 @@ final class MacPowerDataProvider: PowerDataProvider {
         updateCpuTempKeyCacheIfNeeded()
         updatePolarityKey(using: smc)
         let telemetry = batteryInfo.powerTelemetry
-        let efficiencyLoss = Double(telemetry?.adapterEfficiencyLoss ?? 0) / 1000.0
-        let telemetrySystemIn = telemetry.map { Double($0.systemPowerIn) / 1000.0 }
-        let telemetrySystemLoad = telemetry.map { Double($0.systemLoad) / 1000.0 }
-        let telemetryBatteryPower = telemetry.map { Double($0.batteryPower) / 1000.0 }
+        let efficiencyLoss = telemetry?.adapterEfficiencyLossWatts ?? 0
+        let telemetrySystemIn = telemetry?.systemPowerInWatts
+        let telemetrySystemLoad = telemetry?.systemLoadWatts
+        let telemetryBatteryPower = telemetry?.batteryPowerWatts
         let adapterInputVoltage = smc.hasAdapterInputVoltage ? smc.adapterInputVoltage : nil
         let adapterInputCurrent = smc.hasAdapterInputCurrent ? smc.adapterInputCurrent : nil
         let adapterInputPower = resolveAdapterInputPower(
@@ -114,7 +115,7 @@ final class MacPowerDataProvider: PowerDataProvider {
             preferTelemetryBatteryPower: useTelemetrySystem
         )
         let adapterPower = adapterInputPower ?? (systemIn + efficiencyLoss)
-        let batteryHealthPercent = batteryHealthPercent(from: smc)
+        let batteryHealthPercent = batteryHealthPercent(smc: smc, batteryInfo: batteryInfo)
         let batteryRemainingWh = batteryRemainingWh(from: smc, batteryInfo: batteryInfo)
         let smcTime = batteryInfo.isCharging
             ? (smc.hasTimeToFull ? smc.timeToFull : 0)
@@ -173,12 +174,32 @@ final class MacPowerDataProvider: PowerDataProvider {
         )
     }
 
-    private func batteryHealthPercent(from smc: SMCPowerData) -> Double? {
+    private func batteryHealthPercent(smc: SMCPowerData, batteryInfo: BatteryInfo) -> Double? {
+        Self.resolvedBatteryHealthPercent(smc: smc, batteryInfo: batteryInfo)
+    }
+
+    static func resolvedBatteryHealthPercent(smc: SMCPowerData, batteryInfo: BatteryInfo) -> Double? {
+        if let maximumCapacityPercent = batteryInfo.maximumCapacityPercent,
+           maximumCapacityPercent > 0 {
+            return clampBatteryHealthPercent(Double(maximumCapacityPercent))
+        }
+
+        if let nominalChargeCapacity = batteryInfo.nominalChargeCapacity,
+           let designCapacity = batteryInfo.designCapacity,
+           nominalChargeCapacity > 0,
+           designCapacity > 0 {
+            let raw = (Double(nominalChargeCapacity) / Double(designCapacity)) * 100.0
+            return clampBatteryHealthPercent(raw)
+        }
+
         guard smc.hasDesignCapacity, smc.hasFullChargeCapacity,
               smc.designCapacity > 0, smc.fullChargeCapacity > 0 else { return nil }
         let raw = (smc.fullChargeCapacity / smc.designCapacity) * 100.0
-        let clamped = max(0, min(raw, 120))
-        return clamped
+        return clampBatteryHealthPercent(raw)
+    }
+
+    private static func clampBatteryHealthPercent(_ value: Double) -> Double {
+        max(0, min(value, 100))
     }
 
     private func batteryRemainingWh(from smc: SMCPowerData, batteryInfo: BatteryInfo) -> Double? {
@@ -259,7 +280,11 @@ final class MacPowerDataProvider: PowerDataProvider {
 
     private func saveCachedCpuTemperature(_ cached: CachedTemperature) {
         guard let data = try? JSONEncoder().encode(cached) else { return }
-        UserDefaults.standard.set(data, forKey: cpuTempCacheKey)
+        let key = cpuTempCacheKey
+        // Dispatch to main thread for UserDefaults access
+        DispatchQueue.main.async {
+            UserDefaults.standard.set(data, forKey: key)
+        }
     }
 
     private var cpuTempCacheKey: String {
@@ -276,18 +301,15 @@ final class MacPowerDataProvider: PowerDataProvider {
     private func sanitizeTimeRemaining(_ minutes: Int?, batteryInfo: BatteryInfo) -> Int? {
         guard let minutes, minutes > 0 else { return nil }
 
-        let maxChargeMinutes = 12 * 60
-        let maxDischargeMinutes = 48 * 60
-
         if batteryInfo.isCharging {
-            return minutes <= maxChargeMinutes ? minutes : nil
+            return minutes <= PowerflowConstants.maxChargeMinutes ? minutes : nil
         }
 
         if batteryInfo.isExternalConnected {
             return nil
         }
 
-        return minutes <= maxDischargeMinutes ? minutes : nil
+        return minutes <= PowerflowConstants.maxDischargeMinutes ? minutes : nil
     }
 
     private func smcReadHints(
@@ -316,7 +338,7 @@ final class MacPowerDataProvider: PowerDataProvider {
     private func adjustedBatteryRate(from smc: SMCPowerData, batteryInfo: BatteryInfo) -> Double? {
         guard smc.hasBatteryRate else { return nil }
         let batteryRate = smc.batteryRate
-        let threshold = 0.05
+        let threshold = PowerflowConstants.batteryRatePolarityThreshold
 
         if ppbrPolarity == nil, abs(batteryRate) > threshold {
             if !batteryInfo.isExternalConnected && !batteryInfo.isCharging {
@@ -462,7 +484,8 @@ final class MacPowerDataProvider: PowerDataProvider {
     private func inferredBatteryCurrentScale(smcCurrent: Double, ioCurrent: Double) -> Double? {
         let absSMC = abs(smcCurrent)
         let absIO = abs(ioCurrent)
-        guard absSMC > 0.01, absIO > 0.01 else { return nil }
+        let minimum = PowerflowConstants.minimumCurrentForScaling
+        guard absSMC > minimum, absIO > minimum else { return nil }
         let ratio = absIO / absSMC
         let candidates: [Double] = [0.001, 0.01, 0.1, 1, 10, 100, 1000]
         guard let best = candidates.min(by: { abs(ratio - $0) < abs(ratio - $1) }) else {
@@ -498,11 +521,11 @@ final class MacPowerDataProvider: PowerDataProvider {
 
     private func normalizeVoltageVolts(_ value: Double) -> Double {
         guard value > 0 else { return 0 }
-        return value > 100 ? value / 1000.0 : value
+        return value > PowerflowConstants.voltageUnitThreshold ? value / 1000.0 : value
     }
 
     private func normalizeVoltageMillivolts(_ value: Double) -> Double {
         guard value > 0 else { return 0 }
-        return value > 100 ? value : value * 1000.0
+        return value > PowerflowConstants.voltageUnitThreshold ? value : value * 1000.0
     }
 }

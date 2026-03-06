@@ -12,7 +12,12 @@ final class PowerSettingsStore {
         guard let data = defaults.data(forKey: key) else {
             return .default
         }
-        return (try? JSONDecoder().decode(PowerSettings.self, from: data)) ?? .default
+        let decoded = (try? JSONDecoder().decode(PowerSettings.self, from: data)) ?? .default
+        let clamped = decoded.clamped()
+        if clamped != decoded {
+            save(clamped)
+        }
+        return clamped
     }
 
     func save(_ settings: PowerSettings) {

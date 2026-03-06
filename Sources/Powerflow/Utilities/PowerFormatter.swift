@@ -11,10 +11,6 @@ enum PowerFormatter {
             : title
     }
 
-    static func displayPower(snapshot: PowerSnapshot, settings: PowerSettings) -> Double {
-        displayPowerValue(snapshot: snapshot, settings: settings) ?? 0
-    }
-
     static func displayPowerValue(snapshot: PowerSnapshot, settings: PowerSettings) -> Double? {
         if snapshot.isOnExternalPower && settings.showChargingPower {
             return snapshot.systemIn

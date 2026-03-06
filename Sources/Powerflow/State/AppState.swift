@@ -16,17 +16,7 @@ final class AppState: ObservableObject {
     }
     @Published var settings: PowerSettings {
         didSet {
-            let clamped = settings.clamped()
-            if clamped != settings {
-                settings = clamped
-                return
-            }
-            settingsStore.save(settings)
-            monitor.applySettings(settings, isPopoverVisible: isPopoverVisible)
-            if settings.launchAtLogin != oldValue.launchAtLogin {
-                handleLaunchAtLoginChange(from: oldValue.launchAtLogin, to: settings.launchAtLogin)
-            }
-            refreshStatusBarTitle(using: latestSnapshot)
+            handleSettingsChange(from: oldValue)
         }
     }
 
@@ -34,8 +24,8 @@ final class AppState: ObservableObject {
     private let warmupStore = PowerWarmupStore()
     private let monitor: PowerMonitor
     private let powerSourceMonitor: PowerSourceMonitor
-    private var isApplyingLaunchSetting = false
-    private let historyCapacity = 600
+    private var isApplyingSettingsChange = false
+    private let historyCapacity = PowerflowConstants.historyCapacity
     private var latestSnapshot: PowerSnapshot
     private var historyBuffer: [PowerHistoryPoint]
     private var pendingSnapshot: PendingSnapshot?
@@ -116,25 +106,55 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func handleLaunchAtLoginChange(from oldValue: Bool, to newValue: Bool) {
-        guard !isApplyingLaunchSetting else { return }
-        isApplyingLaunchSetting = true
-        do {
-            try LaunchAtLoginManager.setEnabled(newValue)
-        } catch {
-            launchAtLoginError = error.localizedDescription
-            settings.launchAtLogin = oldValue
+    private func handleSettingsChange(from oldValue: PowerSettings) {
+        guard !isApplyingSettingsChange else { return }
+        guard Thread.isMainThread else {
+            let newSettings = settings
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.settings != newSettings else { return }
+                self.settings = newSettings
+            }
+            return
         }
-        isApplyingLaunchSetting = false
+
+        let resolvedSettings = settings.clamped()
+        if resolvedSettings != settings {
+            replaceSettings(resolvedSettings)
+        }
+
+        if resolvedSettings.launchAtLogin != oldValue.launchAtLogin {
+            do {
+                try LaunchAtLoginManager.setEnabled(resolvedSettings.launchAtLogin)
+            } catch {
+                launchAtLoginError = error.localizedDescription
+                replaceSettings(oldValue)
+                return
+            }
+        }
+
+        persistSettings(resolvedSettings)
+        monitor.applySettings(resolvedSettings, isPopoverVisible: isPopoverVisible)
+        refreshStatusBarTitle(using: latestSnapshot)
     }
 
     private func syncLaunchAtLoginPreference() {
         let actual = LaunchAtLoginManager.isEnabled()
         if settings.launchAtLogin != actual {
-            isApplyingLaunchSetting = true
-            settings.launchAtLogin = actual
-            isApplyingLaunchSetting = false
+            var syncedSettings = settings
+            syncedSettings.launchAtLogin = actual
+            replaceSettings(syncedSettings)
+            persistSettings(syncedSettings)
         }
+    }
+
+    private func replaceSettings(_ newSettings: PowerSettings) {
+        isApplyingSettingsChange = true
+        settings = newSettings
+        isApplyingSettingsChange = false
+    }
+
+    private func persistSettings(_ newSettings: PowerSettings) {
+        settingsStore.save(newSettings)
     }
 
     private func appendHistory(_ snapshot: PowerSnapshot) {
@@ -155,15 +175,13 @@ final class AppState: ObservableObject {
             temperatureC: snapshot.temperatureC,
             fanPercentMax: fanPercentMax
         )
+        // Only maintain single buffer - sync to published history when popover visible
         historyBuffer.append(point)
         if historyBuffer.count > historyCapacity {
             historyBuffer.removeFirst(historyBuffer.count - historyCapacity)
         }
-        if isPopoverVisible {
-            history.append(point)
-            if history.count > historyCapacity {
-                history.removeFirst(history.count - historyCapacity)
-            }
+        if isPopoverVisible && historyNeedsRefresh(for: point) {
+            history = historyBuffer
         }
     }
 
@@ -205,7 +223,7 @@ final class AppState: ObservableObject {
         if now.timeIntervalSince(pending.startedAt) >= holdWindow {
             return true
         }
-        return pending.attempts >= 3
+        return pending.attempts >= PowerflowConstants.maxConsistencyAttempts
     }
 
     private func consistencyHoldWindow() -> TimeInterval {
@@ -215,9 +233,8 @@ final class AppState: ObservableObject {
 
     private func requestConsistencyRetryIfNeeded(now: Date) {
         guard isPopoverVisible else { return }
-        let retryInterval: TimeInterval = 0.4
         if let lastRetry = lastConsistencyRetryAt,
-           now.timeIntervalSince(lastRetry) < retryInterval {
+           now.timeIntervalSince(lastRetry) < PowerflowConstants.consistencyRetryInterval {
             return
         }
         lastConsistencyRetryAt = now
@@ -230,6 +247,10 @@ final class AppState: ObservableObject {
             return max(base * 2.0, 4.0)
         }
         return max(base * 4.0, 10.0)
+    }
+
+    private func historyNeedsRefresh(for point: PowerHistoryPoint) -> Bool {
+        history.count != historyBuffer.count || history.last?.timestamp != point.timestamp
     }
 
     private func handlePopoverVisibilityChange() {
