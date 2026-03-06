@@ -519,6 +519,7 @@ struct FooterActions: View {
 
 struct CardContainer<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
     let content: Content
     let padding: CGFloat
     let tint: Color?
@@ -536,17 +537,21 @@ struct CardContainer<Content: View>: View {
     var body: some View {
         let cardShape = RoundedRectangle(cornerRadius: 20, style: .continuous)
 
-        #if compiler(>=6.2)
-        if #available(macOS 26, *) {
-            content
-                .padding(padding)
-                .glassEffect(in: cardShape)
-        } else {
+        if snapshotRendering {
             fallbackBody(cardShape: cardShape)
-        }
+        } else {
+        #if compiler(>=6.2)
+            if #available(macOS 26, *) {
+                content
+                    .padding(padding)
+                    .glassEffect(in: cardShape)
+            } else {
+                fallbackBody(cardShape: cardShape)
+            }
         #else
-        fallbackBody(cardShape: cardShape)
+            fallbackBody(cardShape: cardShape)
         #endif
+        }
     }
 
     private func fallbackBody(cardShape: RoundedRectangle) -> some View {
@@ -617,27 +622,32 @@ struct PowerStateBadge: View {
 }
 
 struct FooterActionButton: View {
+    @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
     let title: String
     let systemImage: String
     var isProminent: Bool = false
     let action: () -> Void
 
     var body: some View {
-        #if compiler(>=6.2)
-        if #available(macOS 26, *) {
-            if isProminent {
-                Button(action: action) { label }
-                    .buttonStyle(GlassProminentButtonStyle())
-            } else {
-                Button(action: action) { label }
-                    .buttonStyle(GlassButtonStyle())
-            }
-        } else {
+        if snapshotRendering {
             fallbackButton
-        }
+        } else {
+        #if compiler(>=6.2)
+            if #available(macOS 26, *) {
+                if isProminent {
+                    Button(action: action) { label }
+                        .buttonStyle(GlassProminentButtonStyle())
+                } else {
+                    Button(action: action) { label }
+                        .buttonStyle(GlassButtonStyle())
+                }
+            } else {
+                fallbackButton
+            }
         #else
-        fallbackButton
+            fallbackButton
         #endif
+        }
     }
 
     private var label: some View {

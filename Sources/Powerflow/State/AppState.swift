@@ -49,6 +49,12 @@ final class AppState: ObservableObject {
         let label: String
     }
 
+    private struct SnapshotTestState {
+        let settings: PowerSettings
+        let snapshot: PowerSnapshot
+        let history: [PowerHistoryPoint]
+    }
+
     private static let overviewHourMinuteFormatter: DateComponentsFormatter = {
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = [.hour, .minute]
@@ -115,6 +121,59 @@ final class AppState: ObservableObject {
         }
         monitor.start(with: storedSettings, isPopoverVisible: isPopoverVisible, warmup: shouldWarmup)
         powerSourceMonitor.start()
+    }
+
+    private init(snapshotTestState: SnapshotTestState) {
+        let seededSettings = snapshotTestState.settings
+        let seededSnapshot = snapshotTestState.snapshot
+        let seededHistory = snapshotTestState.history
+
+        settings = seededSettings
+        snapshot = seededSnapshot
+        statusSnapshot = seededSnapshot
+        latestSnapshot = seededSnapshot
+        historyBuffer = seededHistory
+        lastHistorySampleAt = seededHistory.last?.timestamp
+        popoverStore = PopoverStateStore()
+        statusBarTitle = PowerFormatter.statusTitle(
+            snapshot: seededSnapshot,
+            settings: seededSettings
+        )
+
+        let monitor = PowerMonitor(provider: MacPowerDataProvider())
+        self.monitor = monitor
+        powerSourceMonitor = PowerSourceMonitor { [weak monitor] in
+            monitor?.triggerImmediateUpdate()
+        }
+        popoverStore.update(
+            makePopoverState(
+                snapshot: seededSnapshot,
+                settings: seededSettings
+            )
+        )
+        monitor.onUpdate = { [weak self] snapshot in
+            DispatchQueue.main.async {
+                self?.apply(snapshot)
+            }
+        }
+        monitor.onWarmupCompleted = { [weak self] in
+            guard let self else { return }
+            self.warmupStore.markCompleted(for: self.modelIdentifier)
+        }
+    }
+
+    static func snapshotTesting(
+        settings: PowerSettings,
+        snapshot: PowerSnapshot,
+        history: [PowerHistoryPoint]
+    ) -> AppState {
+        AppState(
+            snapshotTestState: SnapshotTestState(
+                settings: settings,
+                snapshot: snapshot,
+                history: history
+            )
+        )
     }
 
     private func apply(_ snapshot: PowerSnapshot) {

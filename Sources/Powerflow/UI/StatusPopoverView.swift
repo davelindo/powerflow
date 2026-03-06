@@ -2,16 +2,19 @@ import AppKit
 import SwiftUI
 
 struct StatusPopoverView: View {
+    @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
     @ObservedObject private var popoverStore: PopoverStateStore
-    @State private var showingSettings = false
+    @State private var showingSettings: Bool
     private let appState: AppState
 
     init(
         appState: AppState = .shared,
-        popoverStore: PopoverStateStore? = nil
+        popoverStore: PopoverStateStore? = nil,
+        initialShowingSettings: Bool = false
     ) {
         self.appState = appState
         _popoverStore = ObservedObject(wrappedValue: popoverStore ?? appState.popoverStore)
+        _showingSettings = State(initialValue: initialShowingSettings)
     }
 
     var body: some View {
@@ -56,17 +59,21 @@ struct StatusPopoverView: View {
 
     @ViewBuilder
     private var popoverSections: some View {
-        #if compiler(>=6.2)
-        if #available(macOS 26, *) {
-            GlassEffectContainer(spacing: 10) {
-                mainSections
-            }
-        } else {
+        if snapshotRendering {
             fallbackPopoverSections
-        }
+        } else {
+        #if compiler(>=6.2)
+            if #available(macOS 26, *) {
+                GlassEffectContainer(spacing: 10) {
+                    mainSections
+                }
+            } else {
+                fallbackPopoverSections
+            }
         #else
-        fallbackPopoverSections
+            fallbackPopoverSections
         #endif
+        }
     }
 
     private var fallbackPopoverSections: some View {

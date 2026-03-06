@@ -42,6 +42,24 @@ Run the tests:
 xcodebuild -project Powerflow.xcodeproj -scheme Powerflow -destination "platform=macOS" test
 ```
 
+Update the recorded layout snapshots:
+
+```
+scripts/update_layout_snapshots.sh
+```
+
+Verify the recorded layout snapshots:
+
+```
+scripts/verify_layout_snapshots.sh
+```
+
+Regenerate the README screenshot assets:
+
+```
+scripts/regenerate_assets.sh
+```
+
 Build a release app:
 
 ```

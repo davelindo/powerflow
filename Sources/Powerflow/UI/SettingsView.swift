@@ -9,6 +9,7 @@ struct SettingsView: View {
     }
 
     @EnvironmentObject private var appState: AppState
+    @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
     @State private var draggedTemplateIndex: Int?
     @State private var selectedTemplateIndex: Int?
     @State private var dropTargetIndex: Int?
@@ -224,17 +225,21 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var settingsStack: some View {
+        if snapshotRendering {
+            settingsStackContent
+        } else {
         #if compiler(>=6.2)
-        if #available(macOS 26, *) {
-            GlassEffectContainer(spacing: isCompact ? 8 : 16) {
+            if #available(macOS 26, *) {
+                GlassEffectContainer(spacing: isCompact ? 8 : 16) {
+                    settingsStackContent
+                }
+            } else {
                 settingsStackContent
             }
-        } else {
-            settingsStackContent
-        }
         #else
-        settingsStackContent
+            settingsStackContent
         #endif
+        }
     }
 
     private var settingsStackContent: some View {
