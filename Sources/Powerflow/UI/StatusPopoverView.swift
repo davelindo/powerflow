@@ -47,14 +47,8 @@ struct StatusPopoverView: View {
 
     @ViewBuilder
     private var popoverSections: some View {
-        if #available(macOS 26, *) {
-            GlassEffectContainer(spacing: 10) {
-                mainSections
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                mainSections
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            mainSections
         }
     }
 

@@ -466,34 +466,28 @@ struct CardContainer<Content: View>: View {
     var body: some View {
         let cardShape = RoundedRectangle(cornerRadius: 20, style: .continuous)
 
-        if #available(macOS 26, *) {
-            content
-                .padding(padding)
-                .glassEffect(in: cardShape)
-        } else {
-            content
-                .padding(padding)
-                .background {
-                    ZStack {
-                        if let tint {
-                            cardShape.fill(
-                                LinearGradient(
-                                    colors: [
-                                        tint.opacity(colorScheme == .light ? 0.06 : 0.08),
-                                        tint.opacity(colorScheme == .light ? 0.02 : 0.03),
-                                        Color.clear,
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
+        content
+            .padding(padding)
+            .background {
+                ZStack {
+                    if let tint {
+                        cardShape.fill(
+                            LinearGradient(
+                                colors: [
+                                    tint.opacity(colorScheme == .light ? 0.06 : 0.08),
+                                    tint.opacity(colorScheme == .light ? 0.02 : 0.03),
+                                    Color.clear,
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
                             )
-                        }
-
-                        cardShape.fill(.thinMaterial)
-                        cardShape.strokeBorder(Color.white.opacity(colorScheme == .light ? 0.10 : 0.06))
+                        )
                     }
+
+                    cardShape.fill(.thinMaterial)
+                    cardShape.strokeBorder(Color.white.opacity(colorScheme == .light ? 0.10 : 0.06))
                 }
-        }
+            }
     }
 }
 
@@ -545,26 +539,16 @@ struct FooterActionButton: View {
     let action: () -> Void
 
     var body: some View {
-        if #available(macOS 26, *) {
-            if isProminent {
-                Button(action: action) { label }
-                .buttonStyle(GlassProminentButtonStyle())
-            } else {
-                Button(action: action) { label }
-                .buttonStyle(GlassButtonStyle())
-            }
-        } else {
-            Button(action: action) {
-                label
-                    .foregroundStyle(isProminent ? Color.accentColor : .primary)
-                    .background(backgroundStyle, in: Capsule())
-                    .overlay(
-                        Capsule()
-                            .strokeBorder(Color.white.opacity(isProminent ? 0.12 : 0.08))
-                    )
-            }
-            .buttonStyle(.plain)
+        Button(action: action) {
+            label
+                .foregroundStyle(isProminent ? Color.accentColor : .primary)
+                .background(backgroundStyle, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.white.opacity(isProminent ? 0.12 : 0.08))
+                )
         }
+        .buttonStyle(.plain)
     }
 
     private var label: some View {

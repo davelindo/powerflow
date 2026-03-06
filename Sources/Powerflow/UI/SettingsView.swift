@@ -224,25 +224,15 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var settingsStack: some View {
-        if #available(macOS 26, *) {
-            GlassEffectContainer(spacing: isCompact ? 8 : 16) {
-                if layout == .window {
-                    windowTitle
-                }
-                menubarSection
-                powerSection
-                batterySection
-                updatesSection
-                generalSection
+        VStack(alignment: .leading, spacing: isCompact ? 8 : 16) {
+            if layout == .window {
+                windowTitle
             }
-        } else {
-            VStack(alignment: .leading, spacing: isCompact ? 8 : 16) {
-                menubarSection
-                powerSection
-                batterySection
-                updatesSection
-                generalSection
-            }
+            menubarSection
+            powerSection
+            batterySection
+            updatesSection
+            generalSection
         }
     }
 
