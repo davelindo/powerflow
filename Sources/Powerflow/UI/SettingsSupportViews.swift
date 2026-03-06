@@ -352,12 +352,31 @@ struct PoofBurst: View {
 }
 
 struct MenuBarPreview: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
     let title: String
     let icon: PowerSettings.StatusBarIcon
     let snapshot: PowerSnapshot
     var compact: Bool = false
 
     var body: some View {
+        if snapshotRendering {
+            fallbackBody
+        } else {
+        #if compiler(>=6.2)
+            if #available(macOS 26, *) {
+                labelBody
+                    .glassEffect(in: Capsule())
+            } else {
+                fallbackBody
+            }
+        #else
+            fallbackBody
+        #endif
+        }
+    }
+
+    private var labelBody: some View {
         HStack(spacing: 6) {
             if let iconImage {
                 Image(nsImage: iconImage)
@@ -374,14 +393,37 @@ struct MenuBarPreview: View {
         }
         .padding(.horizontal, compact ? 8 : 10)
         .padding(.vertical, compact ? 4 : 6)
-        .background(
-            Capsule()
-                .fill(Color.white.opacity(0.10))
-        )
-        .overlay(
-            Capsule()
-                .stroke(Color.white.opacity(0.10))
-        )
+    }
+
+    private var fallbackBody: some View {
+        labelBody
+            .background(
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: colorScheme == .light
+                                ? [
+                                    Color.white.opacity(0.6),
+                                    Color.white.opacity(0.26)
+                                ]
+                                : [
+                                    Color.white.opacity(0.18),
+                                    Color.white.opacity(0.08)
+                                ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(colorScheme == .light ? 0.46 : 0.12))
+            )
+            .shadow(
+                color: Color.black.opacity(colorScheme == .light ? 0.05 : 0.16),
+                radius: 8,
+                y: 2
+            )
     }
 
     private var iconImage: NSImage? {

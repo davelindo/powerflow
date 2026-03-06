@@ -281,27 +281,41 @@ struct SettingsView: View {
                     Divider()
 
                     settingsRow("Preset") {
-                        Menu(currentPresetLabel) {
+                        Menu {
                             ForEach(formatPresets) { preset in
                                 Button(preset.name) {
                                     appState.settings.statusBarFormat = preset.format
                                 }
                             }
+                        } label: {
+                            SelectionMenuLabel(
+                                title: currentPresetLabel,
+                                width: isCompact ? 138 : 156
+                            )
                         }
-                        .menuStyle(.borderlessButton)
                     }
 
                     Divider()
 
                     settingsRow("Icon") {
-                        Picker("", selection: $appState.settings.statusBarIcon) {
+                        Menu {
                             ForEach(PowerSettings.StatusBarIcon.allCases) { icon in
-                                Text(icon.label).tag(icon)
+                                Button {
+                                    appState.settings.statusBarIcon = icon
+                                } label: {
+                                    if icon == appState.settings.statusBarIcon {
+                                        Label(icon.label, systemImage: "checkmark")
+                                    } else {
+                                        Text(icon.label)
+                                    }
+                                }
                             }
+                        } label: {
+                            SelectionMenuLabel(
+                                title: appState.settings.statusBarIcon.label,
+                                width: isCompact ? 138 : 156
+                            )
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: isCompact ? 138 : 156)
                     }
                 }
 
@@ -460,14 +474,24 @@ struct SettingsView: View {
         ) {
             settingsRows {
                 settingsRow("Item") {
-                    Picker("", selection: $appState.settings.statusBarItem) {
+                    Menu {
                         ForEach(PowerSettings.StatusBarItem.allCases) { item in
-                            Text(item.label).tag(item)
+                            Button {
+                                appState.settings.statusBarItem = item
+                            } label: {
+                                if item == appState.settings.statusBarItem {
+                                    Label(item.label, systemImage: "checkmark")
+                                } else {
+                                    Text(item.label)
+                                }
+                            }
                         }
+                    } label: {
+                        SelectionMenuLabel(
+                            title: appState.settings.statusBarItem.label,
+                            width: isCompact ? 138 : 156
+                        )
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: isCompact ? 138 : 156)
                 }
 
                 Divider()

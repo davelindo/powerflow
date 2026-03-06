@@ -53,7 +53,7 @@ struct StatusPopoverView: View {
             )
         }
         .frame(width: 402, height: 590)
-        .background(shellBackground)
+        .modifier(SnapshotShellModifier(enabled: snapshotRendering))
         .animation(.spring(response: 0.28, dampingFraction: 0.9), value: showingSettings)
     }
 
@@ -92,9 +92,33 @@ struct StatusPopoverView: View {
             HistorySection(state: popoverState.history)
         }
     }
+}
 
-    private var shellBackground: some View {
-        Color.clear
+private struct SnapshotShellModifier: ViewModifier {
+    let enabled: Bool
+
+    private var shellShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+    }
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .background(shellFill, in: shellShape)
+                .overlay(shellShape.stroke(shellStroke, lineWidth: 1))
+                .clipShape(shellShape)
+                .compositingGroup()
+        } else {
+            content.background(Color.clear)
+        }
+    }
+
+    private var shellFill: Color {
+        Color(nsColor: NSColor(calibratedWhite: 0.96, alpha: 0.96))
+    }
+
+    private var shellStroke: Color {
+        Color(nsColor: NSColor(calibratedWhite: 1.0, alpha: 0.72))
     }
 }
 

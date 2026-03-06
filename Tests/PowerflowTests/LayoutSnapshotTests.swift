@@ -42,12 +42,10 @@ final class LayoutSnapshotTests: XCTestCase {
         try LayoutSnapshotHarness.assertSnapshot(
             named: "history-section-light",
             size: LayoutSnapshotHarness.featureAssetSize,
-            view: VStack(spacing: 0) {
+            view: FeatureAssetShell {
                 HistorySection(state: appState.popoverStore.state.history)
                     .snapshotEnvironment()
-                Spacer(minLength: 0)
             }
-            .padding(12)
         )
     }
 
@@ -220,7 +218,7 @@ private enum LayoutSnapshotHarness {
     static let isRecording = mode == .record
     static let isVerificationEnabled = mode == .verify
     static let popoverSize = CGSize(width: 402, height: 590)
-    static let featureAssetSize = CGSize(width: 338, height: 472)
+    static let featureAssetSize = CGSize(width: 370, height: 504)
     private static let meanDeltaTolerance = 0.003
     private static let changedPixelTolerance = 0.015
 
@@ -446,6 +444,37 @@ private extension View {
         environment(\.powerflowSnapshotRendering, true)
             .environment(\.colorScheme, .light)
             .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+    }
+}
+
+private struct FeatureAssetShell<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    private let shellShape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
+    var body: some View {
+        VStack(spacing: 0) {
+            content()
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(
+            width: LayoutSnapshotHarness.featureAssetSize.width,
+            height: LayoutSnapshotHarness.featureAssetSize.height,
+            alignment: .topLeading
+        )
+        .background(
+            Color(nsColor: NSColor(calibratedWhite: 0.96, alpha: 0.96)),
+            in: shellShape
+        )
+        .overlay(
+            shellShape.stroke(
+                Color(nsColor: NSColor(calibratedWhite: 1.0, alpha: 0.72)),
+                lineWidth: 1
+            )
+        )
+        .clipShape(shellShape)
+        .compositingGroup()
     }
 }
 

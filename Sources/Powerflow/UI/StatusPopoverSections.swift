@@ -83,14 +83,24 @@ struct HistorySection: View {
 
                 PopoverInfoGroup {
                     PopoverInfoRow("View") {
-                        Picker("", selection: $focus) {
+                        Menu {
                             ForEach(HistoryFocus.allCases) { item in
-                                Text(item.rawValue).tag(item)
+                                Button {
+                                    focus = item
+                                } label: {
+                                    if item == focus {
+                                        Label(item.rawValue, systemImage: "checkmark")
+                                    } else {
+                                        Text(item.rawValue)
+                                    }
+                                }
                             }
+                        } label: {
+                            SelectionMenuLabel(
+                                title: focus.rawValue,
+                                width: 148
+                            )
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 140)
                     }
 
                     Divider()
@@ -676,6 +686,85 @@ struct FooterActionButton: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct SelectionMenuLabel: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
+
+    let title: String
+    var width: CGFloat? = nil
+
+    private let controlShape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
+    var body: some View {
+        if snapshotRendering {
+            fallbackLabel
+        } else {
+        #if compiler(>=6.2)
+            if #available(macOS 26, *) {
+                baseLabel
+                    .glassEffect(.regular.interactive(), in: controlShape)
+            } else {
+                fallbackLabel
+            }
+        #else
+            fallbackLabel
+        #endif
+        }
+    }
+
+    private var baseLabel: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+
+            Spacer(minLength: 8)
+
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(width: width, alignment: .leading)
+        .contentShape(controlShape)
+    }
+
+    private var fallbackLabel: some View {
+        baseLabel
+            .background(controlBackground, in: controlShape)
+            .overlay(
+                controlShape
+                    .strokeBorder(Color.white.opacity(colorScheme == .light ? 0.48 : 0.12))
+            )
+            .shadow(
+                color: Color.black.opacity(colorScheme == .light ? 0.05 : 0.16),
+                radius: 8,
+                y: 2
+            )
+    }
+
+    private var controlBackground: some ShapeStyle {
+        AnyShapeStyle(
+            LinearGradient(
+                colors: colorScheme == .light
+                    ? [
+                        Color.white.opacity(0.62),
+                        Color.white.opacity(0.28)
+                    ]
+                    : [
+                        Color.white.opacity(0.18),
+                        Color.white.opacity(0.08)
+                    ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
     }
 }
 
