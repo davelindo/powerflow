@@ -25,8 +25,8 @@ Fork reference: https://github.com/lzt1008/powerflow
 
 ## Requirements
 
-- macOS 26+
-- Xcode 26 (recommended) or any Xcode that can target macOS 26
+- macOS 15+
+- Xcode 16.4 or newer
 
 ## Build and Run
 
