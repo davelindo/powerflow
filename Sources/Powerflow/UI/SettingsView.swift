@@ -224,6 +224,20 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var settingsStack: some View {
+        #if compiler(>=6.2)
+        if #available(macOS 26, *) {
+            GlassEffectContainer(spacing: isCompact ? 8 : 16) {
+                settingsStackContent
+            }
+        } else {
+            settingsStackContent
+        }
+        #else
+        settingsStackContent
+        #endif
+    }
+
+    private var settingsStackContent: some View {
         VStack(alignment: .leading, spacing: isCompact ? 8 : 16) {
             if layout == .window {
                 windowTitle

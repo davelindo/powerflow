@@ -466,6 +466,20 @@ struct CardContainer<Content: View>: View {
     var body: some View {
         let cardShape = RoundedRectangle(cornerRadius: 20, style: .continuous)
 
+        #if compiler(>=6.2)
+        if #available(macOS 26, *) {
+            content
+                .padding(padding)
+                .glassEffect(in: cardShape)
+        } else {
+            fallbackBody(cardShape: cardShape)
+        }
+        #else
+        fallbackBody(cardShape: cardShape)
+        #endif
+    }
+
+    private func fallbackBody(cardShape: RoundedRectangle) -> some View {
         content
             .padding(padding)
             .background {
@@ -539,16 +553,21 @@ struct FooterActionButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            label
-                .foregroundStyle(isProminent ? Color.accentColor : .primary)
-                .background(backgroundStyle, in: Capsule())
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Color.white.opacity(isProminent ? 0.12 : 0.08))
-                )
+        #if compiler(>=6.2)
+        if #available(macOS 26, *) {
+            if isProminent {
+                Button(action: action) { label }
+                    .buttonStyle(GlassProminentButtonStyle())
+            } else {
+                Button(action: action) { label }
+                    .buttonStyle(GlassButtonStyle())
+            }
+        } else {
+            fallbackButton
         }
-        .buttonStyle(.plain)
+        #else
+        fallbackButton
+        #endif
     }
 
     private var label: some View {
@@ -564,6 +583,19 @@ struct FooterActionButton: View {
         }
 
         return AnyShapeStyle(.thinMaterial)
+    }
+
+    private var fallbackButton: some View {
+        Button(action: action) {
+            label
+                .foregroundStyle(isProminent ? Color.accentColor : .primary)
+                .background(backgroundStyle, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.white.opacity(isProminent ? 0.12 : 0.08))
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 

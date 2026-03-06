@@ -47,6 +47,20 @@ struct StatusPopoverView: View {
 
     @ViewBuilder
     private var popoverSections: some View {
+        #if compiler(>=6.2)
+        if #available(macOS 26, *) {
+            GlassEffectContainer(spacing: 10) {
+                mainSections
+            }
+        } else {
+            fallbackPopoverSections
+        }
+        #else
+        fallbackPopoverSections
+        #endif
+    }
+
+    private var fallbackPopoverSections: some View {
         VStack(alignment: .leading, spacing: 10) {
             mainSections
         }
