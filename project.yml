@@ -16,7 +16,26 @@ targets:
       - path: Sources
     resources:
       - path: Resources
+    frameworks:
+      - IOKit
+      - ServiceManagement
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.powerflow.app
         INFOPLIST_FILE: Resources/Info.plist
+    scheme:
+      testTargets:
+        - PowerflowTests
+  PowerflowTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/PowerflowTests
+    dependencies:
+      - target: Powerflow
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.powerflow.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Powerflow.app/Contents/MacOS/Powerflow"
+        BUNDLE_LOADER: "$(TEST_HOST)"

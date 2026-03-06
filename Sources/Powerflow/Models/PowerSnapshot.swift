@@ -42,10 +42,6 @@ struct ThermalPressure: Equatable {
     var displayValue: String {
         label == "Unknown" ? label : "\(label) (\(level))"
     }
-
-    var isNominal: Bool {
-        level == 0
-    }
 }
 
 struct PowerDiagnostics: Equatable {
@@ -156,30 +152,11 @@ extension PowerSnapshot {
     }
 
     var powerStateLabel: String {
-        if isCharging {
-            return "Charging"
-        }
-        if isExternalPowerConnected {
-            return "On Power"
-        }
-        return "On Battery"
-    }
-
-    var powerStateIconName: String {
-        if isCharging {
-            return "bolt.fill"
-        }
-        if isExternalPowerConnected {
-            return "powerplug.fill"
-        }
-        return "battery.100"
+        isCharging ? "Charging" : (isExternalPowerConnected ? "On Power" : "On Battery")
     }
 
     var isChargingActive: Bool {
-        if isCharging {
-            return true
-        }
-        return diagnostics.smc.chargingStatus > 0.5
+        isCharging || diagnostics.smc.chargingStatus > 0.5
     }
 
     var socDisplayName: String? {
@@ -223,17 +200,9 @@ extension PowerSnapshot {
 
 extension PowerSnapshot {
     var hasSystemPowerData: Bool {
-        if diagnostics.smc.hasDeliveryRate || diagnostics.smc.hasSystemTotal {
-            return true
-        }
-        if let telemetry = diagnostics.telemetry {
-            return telemetry.systemPowerIn != 0
-                || telemetry.systemLoad != 0
-                || telemetry.systemCurrentIn != 0
-                || telemetry.systemVoltageIn != 0
-                || telemetry.systemEnergyConsumed != 0
-        }
-        return false
+        diagnostics.smc.hasDeliveryRate
+            || diagnostics.smc.hasSystemTotal
+            || (diagnostics.telemetry?.hasSystemPowerData ?? false)
     }
 
     var powerBalanceMismatch: Double {
@@ -245,11 +214,14 @@ extension PowerSnapshot {
         let net = systemIn - systemLoad
         let netMagnitude = abs(net)
         let batteryMagnitude = abs(batteryPower)
-        if netMagnitude < 0.5 && batteryMagnitude < 0.5 {
+        let minMagnitude = PowerflowConstants.minimumPowerMagnitude
+        if netMagnitude < minMagnitude && batteryMagnitude < minMagnitude {
             return true
         }
 
-        let allowedMismatch = max(1.0, max(netMagnitude, batteryMagnitude) * 0.25)
+        let tolerance = PowerflowConstants.powerBalanceMismatchTolerance
+        let baseMismatch = PowerflowConstants.defaultPowerBalanceMismatch
+        let allowedMismatch = max(baseMismatch, max(netMagnitude, batteryMagnitude) * tolerance)
         let signMatches = net == 0 || batteryPower == 0 || (net > 0) == (batteryPower > 0)
         return signMatches && powerBalanceMismatch <= allowedMismatch
     }

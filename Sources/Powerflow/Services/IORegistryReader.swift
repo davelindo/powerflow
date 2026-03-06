@@ -19,6 +19,19 @@ struct PowerTelemetry: Equatable {
         systemPowerIn: 0,
         systemVoltageIn: 0
     )
+
+    var hasSystemPowerData: Bool {
+        systemPowerIn != 0
+            || systemLoad != 0
+            || systemCurrentIn != 0
+            || systemVoltageIn != 0
+            || systemEnergyConsumed != 0
+    }
+
+    var adapterEfficiencyLossWatts: Double { Double(adapterEfficiencyLoss) / 1000.0 }
+    var batteryPowerWatts: Double { Double(batteryPower) / 1000.0 }
+    var systemPowerInWatts: Double { Double(systemPowerIn) / 1000.0 }
+    var systemLoadWatts: Double { Double(systemLoad) / 1000.0 }
 }
 
 enum BatteryCapacityUnits: String, Equatable {
@@ -29,6 +42,9 @@ enum BatteryCapacityUnits: String, Equatable {
 struct BatteryInfo: Equatable {
     var currentCapacity: Int
     var maxCapacity: Int?
+    var designCapacity: Int?
+    var nominalChargeCapacity: Int?
+    var maximumCapacityPercent: Int?
     var capacityUnits: BatteryCapacityUnits
     var batteryPercent: Int
     var isCharging: Bool
@@ -47,6 +63,9 @@ struct BatteryInfo: Equatable {
     static let empty = BatteryInfo(
         currentCapacity: 0,
         maxCapacity: nil,
+        designCapacity: nil,
+        nominalChargeCapacity: nil,
+        maximumCapacityPercent: nil,
         capacityUnits: .percent,
         batteryPercent: 0,
         isCharging: false,
@@ -72,6 +91,9 @@ final class IORegistryReader {
         let maxCapacity = intValue(dict, key: "MaxCapacity")
             ?? intValue(dict, key: "AppleRawMaxCapacity")
             ?? intValue(dict, key: "DesignCapacity")
+        let designCapacity = intValue(dict, key: "DesignCapacity")
+        let nominalChargeCapacity = intValue(dict, key: "NominalChargeCapacity")
+        let maximumCapacityPercent = intValue(dict, key: "MaximumCapacityPercent")
         let isCharging = boolValue(dict, key: "IsCharging") ?? false
         let isExternalConnected = boolValue(dict, key: "ExternalConnected") ?? false
         let timeRemaining = intValue(dict, key: "TimeRemaining")
@@ -100,6 +122,9 @@ final class IORegistryReader {
         return BatteryInfo(
             currentCapacity: currentCapacity,
             maxCapacity: maxCapacity,
+            designCapacity: designCapacity,
+            nominalChargeCapacity: nominalChargeCapacity,
+            maximumCapacityPercent: maximumCapacityPercent,
             capacityUnits: capacityUnits,
             batteryPercent: batteryPercent,
             isCharging: isCharging,

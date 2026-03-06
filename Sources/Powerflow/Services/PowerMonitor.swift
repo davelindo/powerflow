@@ -1,9 +1,9 @@
 import Foundation
 
 final class PowerMonitor {
-    static let backgroundUpdateInterval: TimeInterval = 10.0
-    private static let warmupSampleTarget = 12
-    private static let warmupMaxDuration: TimeInterval = 60
+    private static let backgroundUpdateInterval = PowerflowConstants.backgroundUpdateInterval
+    private static let warmupSampleTarget = PowerflowConstants.warmupSampleTarget
+    private static let warmupMaxDuration = PowerflowConstants.warmupMaxDuration
 
     private let provider: PowerDataProvider
     private var timer: DispatchSourceTimer?
@@ -68,15 +68,21 @@ final class PowerMonitor {
     }
 
     private func scheduleTimer() {
-        timer?.cancel()
-        let qos: DispatchQoS.QoSClass = detailLevel == .full ? .userInitiated : .utility
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: qos))
-        timer.schedule(deadline: .now() + interval, repeating: interval)
-        timer.setEventHandler { [weak self] in
-            self?.requestUpdate()
+        // Cancel existing timer atomically
+        if let oldTimer = timer {
+            // DispatchSourceTimer must be resumed before cancel if suspended
+            // Since we always resume after creation, we can safely cancel
+            oldTimer.cancel()
+            timer = nil
         }
-        timer.resume()
-        self.timer = timer
+
+        let newTimer = DispatchSource.makeTimerSource(queue: updateQueue)
+        newTimer.schedule(deadline: .now() + interval, repeating: interval)
+        newTimer.setEventHandler { [weak self] in
+            self?.sendImmediate()
+        }
+        timer = newTimer
+        newTimer.resume()
     }
 
     func triggerImmediateUpdate(

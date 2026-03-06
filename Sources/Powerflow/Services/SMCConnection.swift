@@ -6,6 +6,7 @@ private let kSMCUserClient = UInt32(0)
 private let kSMCIndex = UInt32(2)
 private let kSMCCmdReadKeyInfo = UInt8(9)
 private let kSMCCmdReadBytes = UInt8(5)
+private let kSMCCmdWriteBytes = UInt8(6)
 private let smcTypeTrimSet = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
 
 private typealias SMCBytes32 = (
@@ -22,6 +23,18 @@ private func makeBytes32() -> SMCBytes32 {
 
 private func bytesArray(from tuple: SMCBytes32) -> [UInt8] {
     withUnsafeBytes(of: tuple) { Array($0) }
+}
+
+private func bytesTuple(from bytes: [UInt8]) -> SMCBytes32 {
+    var tuple = makeBytes32()
+    withUnsafeMutableBytes(of: &tuple) { buffer in
+        let count = min(buffer.count, bytes.count)
+        guard count > 0 else { return }
+        for index in 0..<count {
+            buffer[index] = bytes[index]
+        }
+    }
+    return tuple
 }
 
 private func keyToUInt32(_ key: String) -> UInt32 {
@@ -161,33 +174,7 @@ struct SMCValue {
 
     private func fixedPointValue(type: String) -> Double? {
         guard bytes.count >= 2 else { return nil }
-        let mapping: [String: (Double, Bool)] = [
-            "fp1f": (32768.0, false),
-            "fp2e": (16384.0, false),
-            "fp3d": (8192.0, false),
-            "fp4c": (4096.0, false),
-            "fp5b": (2048.0, false),
-            "fp6a": (1024.0, false),
-            "fp79": (512.0, false),
-            "fp88": (256.0, false),
-            "fpa6": (64.0, false),
-            "fpc4": (16.0, false),
-            "fpe2": (4.0, false),
-            "sp1e": (16384.0, true),
-            "sp2d": (8192.0, true),
-            "sp3c": (4096.0, true),
-            "sp4b": (2048.0, true),
-            "sp5a": (1024.0, true),
-            "sp69": (512.0, true),
-            "sp78": (256.0, true),
-            "sp87": (128.0, true),
-            "sp96": (64.0, true),
-            "spa5": (32.0, true),
-            "spb4": (16.0, true),
-            "spf0": (1.0, true),
-        ]
-
-        guard let (divisor, signed) = mapping[type] else { return nil }
+        guard let (divisor, signed) = Self.fixedPointDivisors[type] else { return nil }
         let raw = UInt16(bytes[0]) | (UInt16(bytes[1]) << 8)
         if signed {
             let signedValue = Int16(bitPattern: raw)
@@ -195,6 +182,32 @@ struct SMCValue {
         }
         return Double(raw) / divisor
     }
+
+    private static let fixedPointDivisors: [String: (Double, Bool)] = [
+        "fp1f": (32768.0, false),
+        "fp2e": (16384.0, false),
+        "fp3d": (8192.0, false),
+        "fp4c": (4096.0, false),
+        "fp5b": (2048.0, false),
+        "fp6a": (1024.0, false),
+        "fp79": (512.0, false),
+        "fp88": (256.0, false),
+        "fpa6": (64.0, false),
+        "fpc4": (16.0, false),
+        "fpe2": (4.0, false),
+        "sp1e": (16384.0, true),
+        "sp2d": (8192.0, true),
+        "sp3c": (4096.0, true),
+        "sp4b": (2048.0, true),
+        "sp5a": (1024.0, true),
+        "sp69": (512.0, true),
+        "sp78": (256.0, true),
+        "sp87": (128.0, true),
+        "sp96": (64.0, true),
+        "spa5": (32.0, true),
+        "spb4": (16.0, true),
+        "spf0": (1.0, true),
+    ]
 }
 
 final class SMCConnection {
@@ -239,6 +252,27 @@ final class SMCConnection {
             dataType: dataType,
             bytes: bytes
         )
+    }
+
+    func writeKey(_ key: String, bytes: [UInt8]) -> Bool {
+        let keyInt = keyToUInt32(key)
+        guard let keyInfo = getKeyInfo(keyInt) else { return false }
+        let size = Int(keyInfo.dataSize)
+        guard size > 0 else { return false }
+
+        var input = SMCKeyData()
+        input.key = keyInt
+        input.keyInfo = keyInfo
+        input.data8 = kSMCCmdWriteBytes
+
+        var payload = [UInt8](repeating: 0, count: 32)
+        let count = min(size, bytes.count, payload.count)
+        if count > 0 {
+            payload.replaceSubrange(0..<count, with: bytes.prefix(count))
+        }
+        input.bytes = bytesTuple(from: payload)
+
+        return call(input: input) != nil
     }
 
     private func getKeyInfo(_ key: UInt32) -> SMCKeyInfo? {

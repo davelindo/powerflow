@@ -69,9 +69,11 @@ struct PowerSettings: Codable, Equatable {
     )
 
     func clamped() -> PowerSettings {
-        guard updateIntervalSeconds < Self.minimumUpdateInterval else { return self }
         var updated = self
-        updated.updateIntervalSeconds = Self.minimumUpdateInterval
+
+        if updated.updateIntervalSeconds < Self.minimumUpdateInterval {
+            updated.updateIntervalSeconds = Self.minimumUpdateInterval
+        }
         return updated
     }
 
@@ -103,18 +105,12 @@ struct PowerSettings: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = PowerSettings.default
-        updateIntervalSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .updateIntervalSeconds)
-            ?? defaults.updateIntervalSeconds
-        statusBarItem = try container.decodeIfPresent(StatusBarItem.self, forKey: .statusBarItem)
-            ?? defaults.statusBarItem
-        showChargingPower = try container.decodeIfPresent(Bool.self, forKey: .showChargingPower)
-            ?? defaults.showChargingPower
-        launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin)
-            ?? defaults.launchAtLogin
-        statusBarFormat = try container.decodeIfPresent(String.self, forKey: .statusBarFormat)
-            ?? defaults.statusBarFormat
-        statusBarIcon = try container.decodeIfPresent(StatusBarIcon.self, forKey: .statusBarIcon)
-            ?? defaults.statusBarIcon
+        updateIntervalSeconds = try container.decode(TimeInterval.self, forKey: .updateIntervalSeconds, default: defaults.updateIntervalSeconds)
+        statusBarItem = try container.decode(StatusBarItem.self, forKey: .statusBarItem, default: defaults.statusBarItem)
+        showChargingPower = try container.decode(Bool.self, forKey: .showChargingPower, default: defaults.showChargingPower)
+        launchAtLogin = try container.decode(Bool.self, forKey: .launchAtLogin, default: defaults.launchAtLogin)
+        statusBarFormat = try container.decode(String.self, forKey: .statusBarFormat, default: defaults.statusBarFormat)
+        statusBarIcon = try container.decode(StatusBarIcon.self, forKey: .statusBarIcon, default: defaults.statusBarIcon)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -125,5 +121,15 @@ struct PowerSettings: Codable, Equatable {
         try container.encode(launchAtLogin, forKey: .launchAtLogin)
         try container.encode(statusBarFormat, forKey: .statusBarFormat)
         try container.encode(statusBarIcon, forKey: .statusBarIcon)
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decode<T: Decodable>(
+        _ type: T.Type,
+        forKey key: Key,
+        default defaultValue: T
+    ) throws -> T {
+        try decodeIfPresent(type, forKey: key) ?? defaultValue
     }
 }
