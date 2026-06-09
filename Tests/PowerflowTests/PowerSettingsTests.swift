@@ -25,5 +25,49 @@ final class PowerSettingsTests: XCTestCase {
         XCTAssertTrue(settings.launchAtLogin)
         XCTAssertEqual(settings.statusBarFormat, "{power} / {battery}")
         XCTAssertEqual(settings.statusBarIcon, .waveform)
+        XCTAssertTrue(settings.showAppEnergyOffenders)
+    }
+
+    func testProcessActivitySettingPreservesExplicitFalse() throws {
+        var settings = PowerSettings.default
+        settings.showAppEnergyOffenders = false
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(PowerSettings.self, from: data)
+
+        XCTAssertFalse(decoded.showAppEnergyOffenders)
+    }
+
+    @MainActor
+    func testDisablingProcessActivityClearsDisplayedOffenders() {
+        var settings = PowerSettings.default
+        settings.showAppEnergyOffenders = true
+
+        var snapshot = PowerSnapshot.empty
+        snapshot.appEnergyOffenders = [
+            AppEnergyOffender(
+                groupID: "com.example.editor",
+                primaryPID: 101,
+                name: "Editor",
+                iconPath: nil,
+                processCount: 1,
+                impactScore: 12.4,
+                cpuPercent: 8.0,
+                memoryBytes: 256_000_000,
+                pageinsPerSecond: 0.1
+            )
+        ]
+
+        let appState = AppState.snapshotTesting(
+            settings: settings,
+            snapshot: snapshot,
+            history: []
+        )
+        XCTAssertFalse(appState.popoverStore.state.history.offenders.isEmpty)
+
+        appState.settings.showAppEnergyOffenders = false
+
+        XCTAssertTrue(appState.snapshot.appEnergyOffenders.isEmpty)
+        XCTAssertTrue(appState.popoverStore.state.history.offenders.isEmpty)
     }
 }

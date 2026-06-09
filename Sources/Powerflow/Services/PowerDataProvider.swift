@@ -16,6 +16,10 @@ final class MacPowerDataProvider: PowerDataProvider {
     private let thermalReader = ThermalPressureReader()
     private let hidTemperatureReader = HIDTemperatureReader()
     private let powerSourceReader = PowerSourceReader()
+    private let batteryHealthProfilerReader = BatteryHealthProfilerReader()
+    private let connectedDeviceReader = ConnectedDeviceReader()
+    private let profilerBatteryHealthQueue = DispatchQueue(label: "Powerflow.batteryHealthProfiler.refresh", qos: .utility)
+    private let profilerBatteryHealthLock = NSLock()
     private let socName: String?
     private let isAppleSilicon: Bool
     private let modelIdentifier: String
@@ -27,6 +31,8 @@ final class MacPowerDataProvider: PowerDataProvider {
     private var cachedCpuTemperature: CachedTemperature?
     private var lastSavedCpuTemperature: CachedTemperature?
     private var lastSavedCpuTempKeys: [String] = []
+    private var cachedProfilerBatteryHealth: CachedBatteryHealth?
+    private var isRefreshingProfilerBatteryHealth = false
 
     init() {
         isAppleSilicon = SystemInfoReader.isAppleSilicon()
@@ -44,6 +50,11 @@ final class MacPowerDataProvider: PowerDataProvider {
     private struct CachedTemperature: Codable {
         let value: Double
         let source: String?
+        let timestamp: Date
+    }
+
+    private struct CachedBatteryHealth {
+        let value: Double?
         let timestamp: Date
     }
 
@@ -68,8 +79,11 @@ final class MacPowerDataProvider: PowerDataProvider {
     private static let fullCpuTempRefreshInterval = PowerflowConstants.fullCpuTempRefreshInterval
     private static let maxCachedCpuTempAge = PowerflowConstants.maxCachedCpuTempAge
     private static let cpuTempPersistInterval = PowerflowConstants.cpuTempPersistInterval
+    private static let batteryHealthProfilerRefreshInterval: TimeInterval = 30 * 60
+    private static let batteryHealthProfilerFailureRefreshInterval: TimeInterval = 60
 
     func readSnapshot(detailLevel: PowerSnapshotDetailLevel, settings: PowerSettings) -> PowerSnapshot {
+        let now = Date()
         let smcHints = smcReadHints(for: settings, detailLevel: detailLevel)
         let batteryInfo = ioReader.readBatteryInfo()
         let smc = smcReader.readPowerData(detailLevel: detailLevel, hints: smcHints)
@@ -88,13 +102,17 @@ final class MacPowerDataProvider: PowerDataProvider {
         )
         let hasSmcSystem = smc.hasDeliveryRate && smc.hasSystemTotal
         let hasTelemetrySystem = telemetrySystemIn != nil && telemetrySystemLoad != nil
-        let useTelemetrySystem = detailLevel == .summary && !hasSmcSystem && hasTelemetrySystem
-        let systemIn = useTelemetrySystem
-            ? (telemetrySystemIn ?? 0)
-            : (smc.hasDeliveryRate ? smc.deliveryRate : (telemetrySystemIn ?? adapterInputPower ?? 0))
-        let systemLoad = useTelemetrySystem
-            ? (telemetrySystemLoad ?? 0)
-            : (smc.hasSystemTotal ? smc.systemTotal : (telemetrySystemLoad ?? 0))
+        let systemPower = Self.resolvedSystemPower(
+            smc: smc,
+            telemetrySystemIn: telemetrySystemIn,
+            telemetrySystemLoad: telemetrySystemLoad,
+            adapterInputPower: adapterInputPower
+        )
+        let preferTelemetryBatteryPower = detailLevel == .summary
+            && !hasSmcSystem
+            && hasTelemetrySystem
+        let systemIn = systemPower.input
+        let systemLoad = systemPower.load
         let lidClosed = smc.lidClosed
         let screenPowerAvailable = smc.hasBrightness && lidClosed != true
         let screenPower = screenPowerAvailable ? smc.brightness : 0
@@ -113,10 +131,10 @@ final class MacPowerDataProvider: PowerDataProvider {
             batteryVoltageMV: batteryVoltageMV,
             systemIn: systemIn,
             systemLoad: systemLoad,
-            preferTelemetryBatteryPower: useTelemetrySystem
+            preferTelemetryBatteryPower: preferTelemetryBatteryPower
         )
         let adapterPower = adapterInputPower ?? (systemIn + efficiencyLoss)
-        let batteryHealthPercent = batteryHealthPercent(smc: smc, batteryInfo: batteryInfo)
+        let batteryHealthPercent = batteryHealthPercent(smc: smc, batteryInfo: batteryInfo, now: now)
         let batteryRemainingWh = batteryRemainingWh(from: smc, batteryInfo: batteryInfo)
         let smcTime = batteryInfo.isCharging
             ? (smc.hasTimeToFull ? smc.timeToFull : 0)
@@ -130,10 +148,13 @@ final class MacPowerDataProvider: PowerDataProvider {
         let batteryTemperatureC = smc.hasTemperature && smc.temperature > 0 ? smc.temperature : nil
         let batteryCellVoltages = resolveBatteryCellVoltages(smc: smc, batteryInfo: batteryInfo)
         let processInfo = ProcessInfo.processInfo
-        let appEnergyOffenders = appEnergyMonitor.sample(detailLevel: detailLevel)
+        let appEnergyOffenders = settings.showAppEnergyOffenders
+            ? appEnergyMonitor.sample(detailLevel: detailLevel)
+            : []
+        let connectedDevices = connectedDeviceReader.readDevices(detailLevel: detailLevel, now: now)
 
         return PowerSnapshot(
-            timestamp: Date(),
+            timestamp: now,
             isCharging: batteryInfo.isCharging,
             isExternalPowerConnected: batteryInfo.isExternalConnected,
             batteryLevel: batteryLevel,
@@ -173,18 +194,76 @@ final class MacPowerDataProvider: PowerDataProvider {
             isLowPowerModeEnabled: processInfo.isLowPowerModeEnabled,
             thermalPressure: thermalPressure,
             appEnergyOffenders: appEnergyOffenders,
+            connectedDevices: connectedDevices,
             diagnostics: PowerDiagnostics(smc: smc, telemetry: telemetry)
         )
     }
 
-    private func batteryHealthPercent(smc: SMCPowerData, batteryInfo: BatteryInfo) -> Double? {
-        Self.resolvedBatteryHealthPercent(smc: smc, batteryInfo: batteryInfo)
+    private func batteryHealthPercent(smc: SMCPowerData, batteryInfo: BatteryInfo, now: Date) -> Double? {
+        let profilerMaximumCapacityPercent = batteryInfo.maximumCapacityPercent == nil
+            ? profilerBatteryHealthPercent(now: now)
+            : nil
+        return Self.resolvedBatteryHealthPercent(
+            smc: smc,
+            batteryInfo: batteryInfo,
+            profilerMaximumCapacityPercent: profilerMaximumCapacityPercent
+        )
     }
 
-    static func resolvedBatteryHealthPercent(smc: SMCPowerData, batteryInfo: BatteryInfo) -> Double? {
+    private func profilerBatteryHealthPercent(now: Date) -> Double? {
+        let cached = cachedProfilerBatteryHealthSnapshot()
+        if let cached {
+            let refreshInterval = cached.value == nil
+                ? Self.batteryHealthProfilerFailureRefreshInterval
+                : Self.batteryHealthProfilerRefreshInterval
+            if now.timeIntervalSince(cached.timestamp) < refreshInterval {
+                return cached.value
+            }
+        }
+
+        refreshProfilerBatteryHealthIfNeeded(now: now)
+        return cached?.value
+    }
+
+    private func cachedProfilerBatteryHealthSnapshot() -> CachedBatteryHealth? {
+        profilerBatteryHealthLock.lock()
+        defer { profilerBatteryHealthLock.unlock() }
+        return cachedProfilerBatteryHealth
+    }
+
+    private func refreshProfilerBatteryHealthIfNeeded(now: Date) {
+        profilerBatteryHealthLock.lock()
+        if isRefreshingProfilerBatteryHealth {
+            profilerBatteryHealthLock.unlock()
+            return
+        }
+        isRefreshingProfilerBatteryHealth = true
+        profilerBatteryHealthLock.unlock()
+
+        profilerBatteryHealthQueue.async { [weak self] in
+            guard let self else { return }
+            let value = self.batteryHealthProfilerReader.readMaximumCapacityPercent()
+
+            self.profilerBatteryHealthLock.lock()
+            self.cachedProfilerBatteryHealth = CachedBatteryHealth(value: value, timestamp: now)
+            self.isRefreshingProfilerBatteryHealth = false
+            self.profilerBatteryHealthLock.unlock()
+        }
+    }
+
+    static func resolvedBatteryHealthPercent(
+        smc: SMCPowerData,
+        batteryInfo: BatteryInfo,
+        profilerMaximumCapacityPercent: Double? = nil
+    ) -> Double? {
         if let maximumCapacityPercent = batteryInfo.maximumCapacityPercent,
            maximumCapacityPercent > 0 {
             return clampBatteryHealthPercent(Double(maximumCapacityPercent))
+        }
+
+        if let profilerMaximumCapacityPercent,
+           profilerMaximumCapacityPercent > 0 {
+            return clampBatteryHealthPercent(profilerMaximumCapacityPercent)
         }
 
         if let nominalChargeCapacity = batteryInfo.nominalChargeCapacity,
@@ -199,6 +278,26 @@ final class MacPowerDataProvider: PowerDataProvider {
               smc.designCapacity > 0, smc.fullChargeCapacity > 0 else { return nil }
         let raw = (smc.fullChargeCapacity / smc.designCapacity) * 100.0
         return clampBatteryHealthPercent(raw)
+    }
+
+    static func resolvedSystemPower(
+        smc: SMCPowerData,
+        telemetrySystemIn: Double?,
+        telemetrySystemLoad: Double?,
+        adapterInputPower: Double?
+    ) -> (input: Double, load: Double) {
+        if smc.hasDeliveryRate && smc.hasSystemTotal {
+            return (smc.deliveryRate, smc.systemTotal)
+        }
+
+        if let telemetrySystemIn, let telemetrySystemLoad {
+            return (telemetrySystemIn, telemetrySystemLoad)
+        }
+
+        return (
+            smc.hasDeliveryRate ? smc.deliveryRate : (adapterInputPower ?? 0),
+            smc.hasSystemTotal ? smc.systemTotal : 0
+        )
     }
 
     private static func clampBatteryHealthPercent(_ value: Double) -> Double {
@@ -240,8 +339,8 @@ final class MacPowerDataProvider: PowerDataProvider {
         let shouldRefresh = cachedAge == nil || (cachedAge ?? 0) > refreshInterval
         let shouldReadHid = !smc.hasCpuTemperature && shouldRefresh
         if shouldReadHid, let hidTemp = hidTemperatureReader.readCPUTemperature() {
-            cacheCpuTemperature(value: hidTemp, source: "HID CPU", timestamp: now)
-            return (hidTemp, "HID CPU")
+            cacheCpuTemperature(value: hidTemp, source: "HID Thermal Sensor", timestamp: now)
+            return (hidTemp, "HID Thermal Sensor")
         }
 
         if let cachedCpuTemperature,

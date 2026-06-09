@@ -363,21 +363,35 @@ struct SettingsView: View {
                                     if dropTargetIndex == index {
                                         TemplateInsertionMarker()
                                     }
-                                    TokenPill(
-                                        text: displayLabel(for: token, tokenValues: tokenValues),
-                                        payload: token.id,
-                                        compact: layout == .popover,
-                                        isSelected: selectedTemplateIndex == index,
-                                        isTemplate: true,
-                                        dragAction: { draggedTemplateIndex = index }
-                                    )
+                                    Button {
+                                        selectedTemplateIndex = index
+                                    } label: {
+                                        TokenPill(
+                                            text: displayLabel(for: token, tokenValues: tokenValues),
+                                            payload: token.id,
+                                            compact: layout == .popover,
+                                            isSelected: selectedTemplateIndex == index,
+                                            isTemplate: true,
+                                            dragAction: { draggedTemplateIndex = index }
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Select \(tokenAccessibilityName(token))")
+                                    .accessibilityLabel("Select \(tokenAccessibilityName(token))")
+                                    .accessibilityAddTraits(selectedTemplateIndex == index ? .isSelected : [])
+                                    .accessibilityAction(named: "Move left") {
+                                        moveTemplateToken(at: index, by: -1)
+                                    }
+                                    .accessibilityAction(named: "Move right") {
+                                        moveTemplateToken(at: index, by: 1)
+                                    }
+                                    .accessibilityAction(named: "Remove") {
+                                        removeTemplateToken(at: index)
+                                    }
                                     .background(alignment: .center) {
                                         if shouldMeasureWidths {
                                             TokenWidthReader(index: index, widths: $templateTokenWidths)
                                         }
-                                    }
-                                    .onTapGesture {
-                                        selectedTemplateIndex = index
                                     }
                                     .onDrop(
                                         of: [UTType.text],
@@ -436,6 +450,7 @@ struct SettingsView: View {
                             )
                         )
                     }
+                    templateKeyboardControls
                 }
             }
             .onChange(of: draggedTemplateIndex) { _, newValue in
@@ -451,18 +466,62 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                     FlowLayout(spacing: 6) {
                         ForEach(availableTokens) { token in
-                            TokenPill(
-                                text: token.label,
-                                payload: token.id,
-                                compact: layout == .popover,
-                                isSelected: selectedTokenIds.contains(token.id)
-                            )
+                            Button {
+                                appendTemplateToken(token)
+                            } label: {
+                                TokenPill(
+                                    text: token.label,
+                                    payload: token.id,
+                                    compact: layout == .popover,
+                                    isSelected: selectedTokenIds.contains(token.id)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .help("Add \(tokenAccessibilityName(token))")
+                            .accessibilityLabel("Add \(tokenAccessibilityName(token))")
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 2)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var templateKeyboardControls: some View {
+        if let selectedTemplateIndex,
+           templateTokens.indices.contains(selectedTemplateIndex) {
+            HStack(spacing: 8) {
+                Button {
+                    moveTemplateToken(at: selectedTemplateIndex, by: -1)
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(selectedTemplateIndex == 0)
+                .help("Move selected token left")
+                .accessibilityLabel("Move selected token left")
+
+                Button {
+                    moveTemplateToken(at: selectedTemplateIndex, by: 1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(selectedTemplateIndex >= templateTokens.count - 1)
+                .help("Move selected token right")
+                .accessibilityLabel("Move selected token right")
+
+                Button(role: .destructive) {
+                    removeTemplateToken(at: selectedTemplateIndex)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .help("Remove selected token")
+                .accessibilityLabel("Remove selected token")
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .padding(.top, 2)
         }
     }
 
@@ -566,6 +625,14 @@ struct SettingsView: View {
                 Toggle("Launch at login", isOn: $appState.settings.launchAtLogin)
                     .toggleStyle(.switch)
                     .padding(.vertical, 10)
+
+                Divider()
+
+                Toggle("Show process activity", isOn: $appState.settings.showAppEnergyOffenders)
+                    .toggleStyle(.switch)
+                    .help("Samples local CPU, memory, and paging activity for Recent Offenders. No process activity leaves this Mac.")
+                    .accessibilityHint("Samples local process activity for Recent Offenders. Turn off to hide and clear those rows.")
+                    .padding(.vertical, 10)
             }
         }
     }
@@ -640,6 +707,16 @@ struct SettingsView: View {
         return value.isEmpty ? "--" : value
     }
 
+    private func tokenAccessibilityName(_ token: FormatToken) -> String {
+        if token.id == "sep:space" {
+            return "space"
+        }
+        if token.isSeparator {
+            return "separator \(token.value)"
+        }
+        return token.label
+    }
+
     private func updateTemplateTokens(_ tokens: [FormatToken]) {
         templateTokens = tokens
         let format = tokens.map(\.value).joined()
@@ -647,6 +724,32 @@ struct SettingsView: View {
         if format != appState.settings.statusBarFormat {
             appState.settings.statusBarFormat = format
         }
+    }
+
+    private func appendTemplateToken(_ token: FormatToken) {
+        var updated = templateTokens
+        let insertIndex = selectedTemplateIndex.map { min($0 + 1, updated.count) } ?? updated.count
+        updated.insert(token, at: insertIndex)
+        selectedTemplateIndex = insertIndex
+        updateTemplateTokens(updated)
+    }
+
+    private func moveTemplateToken(at index: Int, by delta: Int) {
+        guard templateTokens.indices.contains(index) else { return }
+        let newIndex = index + delta
+        guard templateTokens.indices.contains(newIndex) else { return }
+        var updated = templateTokens
+        updated.swapAt(index, newIndex)
+        selectedTemplateIndex = newIndex
+        updateTemplateTokens(updated)
+    }
+
+    private func removeTemplateToken(at index: Int) {
+        guard templateTokens.indices.contains(index) else { return }
+        var updated = templateTokens
+        updated.remove(at: index)
+        selectedTemplateIndex = updated.isEmpty ? nil : min(index, updated.count - 1)
+        updateTemplateTokens(updated)
     }
 
     private func syncTemplateTokens(with format: String) {

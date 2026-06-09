@@ -58,6 +58,7 @@ struct PowerSettings: Codable, Equatable {
     var launchAtLogin: Bool
     var statusBarFormat: String
     var statusBarIcon: StatusBarIcon
+    var showAppEnergyOffenders: Bool
 
     static let `default` = PowerSettings(
         updateIntervalSeconds: 2.0,
@@ -65,7 +66,8 @@ struct PowerSettings: Codable, Equatable {
         showChargingPower: true,
         launchAtLogin: false,
         statusBarFormat: "{power} | {battery}",
-        statusBarIcon: .bolt
+        statusBarIcon: .bolt,
+        showAppEnergyOffenders: true
     )
 
     func clamped() -> PowerSettings {
@@ -84,6 +86,7 @@ struct PowerSettings: Codable, Equatable {
         case launchAtLogin
         case statusBarFormat
         case statusBarIcon
+        case showAppEnergyOffenders
     }
 
     init(
@@ -92,7 +95,8 @@ struct PowerSettings: Codable, Equatable {
         showChargingPower: Bool,
         launchAtLogin: Bool,
         statusBarFormat: String,
-        statusBarIcon: StatusBarIcon
+        statusBarIcon: StatusBarIcon,
+        showAppEnergyOffenders: Bool
     ) {
         self.updateIntervalSeconds = updateIntervalSeconds
         self.statusBarItem = statusBarItem
@@ -100,6 +104,7 @@ struct PowerSettings: Codable, Equatable {
         self.launchAtLogin = launchAtLogin
         self.statusBarFormat = statusBarFormat
         self.statusBarIcon = statusBarIcon
+        self.showAppEnergyOffenders = showAppEnergyOffenders
     }
 
     init(from decoder: Decoder) throws {
@@ -111,6 +116,7 @@ struct PowerSettings: Codable, Equatable {
         launchAtLogin = try container.decode(Bool.self, forKey: .launchAtLogin, default: defaults.launchAtLogin)
         statusBarFormat = try container.decode(String.self, forKey: .statusBarFormat, default: defaults.statusBarFormat)
         statusBarIcon = try container.decode(StatusBarIcon.self, forKey: .statusBarIcon, default: defaults.statusBarIcon)
+        showAppEnergyOffenders = try container.decode(Bool.self, forKey: .showAppEnergyOffenders, default: defaults.showAppEnergyOffenders)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -121,6 +127,7 @@ struct PowerSettings: Codable, Equatable {
         try container.encode(launchAtLogin, forKey: .launchAtLogin)
         try container.encode(statusBarFormat, forKey: .statusBarFormat)
         try container.encode(statusBarIcon, forKey: .statusBarIcon)
+        try container.encode(showAppEnergyOffenders, forKey: .showAppEnergyOffenders)
     }
 }
 

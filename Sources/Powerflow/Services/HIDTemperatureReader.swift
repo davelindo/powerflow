@@ -3,14 +3,14 @@ import Foundation
 import IOKit
 
 final class HIDTemperatureReader {
-    private typealias IOHIDEventSystemClientRef = OpaquePointer
-    private typealias IOHIDServiceClientRef = OpaquePointer
-    private typealias IOHIDEventRef = OpaquePointer
+    private typealias IOHIDEventSystemClientRef = CFTypeRef
+    private typealias IOHIDServiceClientRef = CFTypeRef
+    private typealias IOHIDEventRef = CFTypeRef
 
-    private typealias CreateFunc = @convention(c) (CFAllocator?) -> IOHIDEventSystemClientRef?
+    private typealias CreateFunc = @convention(c) (CFAllocator?) -> Unmanaged<IOHIDEventSystemClientRef>?
     private typealias SetMatchingFunc = @convention(c) (IOHIDEventSystemClientRef, CFDictionary?) -> Void
-    private typealias CopyServicesFunc = @convention(c) (IOHIDEventSystemClientRef) -> CFArray?
-    private typealias CopyEventFunc = @convention(c) (IOHIDServiceClientRef, Int64, Int32, Int64) -> IOHIDEventRef?
+    private typealias CopyServicesFunc = @convention(c) (IOHIDEventSystemClientRef) -> Unmanaged<CFArray>?
+    private typealias CopyEventFunc = @convention(c) (IOHIDServiceClientRef, Int64, Int32, Int64) -> Unmanaged<IOHIDEventRef>?
     private typealias GetFloatValueFunc = @convention(c) (IOHIDEventRef, UInt32) -> Double
 
     private var create: CreateFunc?
@@ -32,12 +32,12 @@ final class HIDTemperatureReader {
               let copyEvent,
               let getFloatValue else { return nil }
 
-        guard let client = create(kCFAllocatorDefault) else { return nil }
+        guard let client = create(kCFAllocatorDefault)?.takeRetainedValue() else { return nil }
 
         let matching: [String: Any] = ["PrimaryUsagePage": 0xff00, "PrimaryUsage": 5]
         setMatching(client, matching as CFDictionary)
 
-        guard let services = copyServices(client) else { return nil }
+        guard let services = copyServices(client)?.takeRetainedValue() else { return nil }
 
         var maxTemp: Double = 0
         let count = CFArrayGetCount(services)
@@ -48,7 +48,7 @@ final class HIDTemperatureReader {
                 to: IOHIDServiceClientRef.self
             )
 
-            if let event = copyEvent(service, eventTypeTemperature, 0, 0) {
+            if let event = copyEvent(service, eventTypeTemperature, 0, 0)?.takeRetainedValue() {
                 let temp = getFloatValue(event, temperatureLevelField)
                 if temp > maxTemp && temp < 150 {
                     maxTemp = temp
@@ -61,29 +61,22 @@ final class HIDTemperatureReader {
 
     private func ensureInitialized() {
         guard !isInitialized else { return }
-        isInitialized = true
 
         guard let handle = dlopen(nil, RTLD_NOW) else { return }
 
-        create = unsafeBitCast(
-            dlsym(handle, "IOHIDEventSystemClientCreate"),
-            to: CreateFunc?.self
-        )
-        setMatching = unsafeBitCast(
-            dlsym(handle, "IOHIDEventSystemClientSetMatching"),
-            to: SetMatchingFunc?.self
-        )
-        copyServices = unsafeBitCast(
-            dlsym(handle, "IOHIDEventSystemClientCopyServices"),
-            to: CopyServicesFunc?.self
-        )
-        copyEvent = unsafeBitCast(
-            dlsym(handle, "IOHIDServiceClientCopyEvent"),
-            to: CopyEventFunc?.self
-        )
-        getFloatValue = unsafeBitCast(
-            dlsym(handle, "IOHIDEventGetFloatValue"),
-            to: GetFloatValueFunc?.self
-        )
+        guard let createSymbol = dlsym(handle, "IOHIDEventSystemClientCreate"),
+              let setMatchingSymbol = dlsym(handle, "IOHIDEventSystemClientSetMatching"),
+              let copyServicesSymbol = dlsym(handle, "IOHIDEventSystemClientCopyServices"),
+              let copyEventSymbol = dlsym(handle, "IOHIDServiceClientCopyEvent"),
+              let getFloatValueSymbol = dlsym(handle, "IOHIDEventGetFloatValue") else {
+            return
+        }
+
+        create = unsafeBitCast(createSymbol, to: CreateFunc.self)
+        setMatching = unsafeBitCast(setMatchingSymbol, to: SetMatchingFunc.self)
+        copyServices = unsafeBitCast(copyServicesSymbol, to: CopyServicesFunc.self)
+        copyEvent = unsafeBitCast(copyEventSymbol, to: CopyEventFunc.self)
+        getFloatValue = unsafeBitCast(getFloatValueSymbol, to: GetFloatValueFunc.self)
+        isInitialized = true
     }
 }

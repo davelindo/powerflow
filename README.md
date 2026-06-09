@@ -23,10 +23,17 @@ Fork reference: https://github.com/lzt1008/powerflow
 - Battery guidance links to Apple's built-in battery management documentation.
 - Diagnostics view for SMC/IORegistry/telemetry data and fan readings.
 
+## Privacy
+
+Powerflow runs locally and does not include network, analytics, or updater code. The
+Recent Offenders section samples local process activity to identify apps with notable
+CPU, memory, and paging activity; this can be disabled in Settings.
+
 ## Requirements
 
 - macOS 15+
 - Xcode 16.4 or newer
+- Xcode 27 beta for macOS 27 SDK validation
 
 ## Build and Run
 
@@ -41,6 +48,15 @@ Run the tests:
 ```
 xcodebuild -project Powerflow.xcodeproj -scheme Powerflow -destination "platform=macOS" test
 ```
+
+Validate against the macOS 27 SDK with Xcode beta:
+
+```
+DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild -project Powerflow.xcodeproj -scheme Powerflow -destination "platform=macOS" test
+```
+
+Repo scripts also accept either `POWERFLOW_USE_XCODE_BETA=1` or
+`POWERFLOW_DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer`.
 
 Update the recorded layout snapshots:
 

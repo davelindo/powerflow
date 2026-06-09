@@ -26,36 +26,263 @@ struct PowerStateAppearance {
 
 struct FlowSection: View {
     let state: PopoverFlowState
-    @State private var showBreakdown = false
 
     var body: some View {
-        CardContainer(padding: 12) {
-            VStack(alignment: .leading, spacing: 10) {
+        CardContainer(padding: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 CardSectionHeader(
                     title: "Power Flow",
                     systemImage: "point.3.connected.trianglepath.dotted"
                 )
+                .padding(.horizontal, 12)
+                .padding(.top, 9)
+                .padding(.bottom, 2)
 
-                PopoverInfoGroup {
-                    PowerFlowView(state: state)
-                        .frame(height: 158)
-                        .padding(.vertical, 8)
+                PowerFlowView(state: state)
+                    .frame(height: 124)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
 
-                    Divider()
+                Divider()
 
-                    DisclosureGroup(isExpanded: $showBreakdown) {
-                        ConsumptionCard(snapshot: state.snapshot)
-                            .padding(.top, 6)
-                            .padding(.bottom, 8)
-                    } label: {
-                        Label("Breakdown", systemImage: "chart.bar.doc.horizontal")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 8)
-                    }
-                }
+                PowerFlowMetricStrip(state: state)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
             }
         }
+    }
+}
+
+struct ConnectedDevicesSection: View {
+    let state: PopoverConnectedDevicesState
+
+    var body: some View {
+        CardContainer(padding: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    Label("Connected Power", systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.headline)
+
+                    Spacer(minLength: 8)
+
+                    Text(state.summaryText)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 9)
+                .padding(.bottom, 7)
+
+                Divider()
+
+                VStack(spacing: 0) {
+                    ForEach(Array(state.devices.enumerated()), id: \.element.id) { index, device in
+                        ConnectedDeviceRow(device: device)
+
+                        if index < state.devices.count - 1 || state.hiddenDeviceCount > 0 {
+                            Divider()
+                        }
+                    }
+
+                    if state.hiddenDeviceCount > 0 {
+                        Text("+\(state.hiddenDeviceCount) more")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 7)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+            }
+        }
+    }
+}
+
+private struct ConnectedDeviceRow: View {
+    let device: PopoverConnectedDeviceRowState
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(device.kind.tint.opacity(0.13))
+                    .frame(width: 28, height: 28)
+
+                Image(systemName: device.kind.systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(device.kind.tint)
+            }
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(device.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Text(device.detailText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(device.batteryText)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+
+                DeviceBatteryBar(percent: device.batteryPercent)
+                    .frame(width: 68, height: 5)
+            }
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(device.name)
+        .accessibilityValue("\(device.detailText), battery \(device.batteryText)")
+    }
+}
+
+private struct DeviceBatteryBar: View {
+    let percent: Int?
+
+    var body: some View {
+        GeometryReader { proxy in
+            let value = Double(percent ?? 0)
+            let fillWidth = min(max(value / 100, 0), 1) * proxy.size.width
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.10))
+
+                Capsule()
+                    .fill(barColor)
+                    .frame(width: fillWidth)
+            }
+        }
+    }
+
+    private var barColor: Color {
+        guard let percent else { return Color(nsColor: .systemGray) }
+        if percent < 20 {
+            return Color(nsColor: .systemRed)
+        }
+        if percent < 45 {
+            return Color(nsColor: .systemOrange)
+        }
+        return Color(nsColor: .systemGreen)
+    }
+}
+
+private extension ConnectedDeviceKind {
+    var systemImage: String {
+        switch self {
+        case .headphones:
+            return "airpodspro"
+        case .mouse:
+            return "computermouse"
+        case .keyboard:
+            return "keyboard"
+        case .trackpad:
+            return "rectangle.and.hand.point.up.left"
+        case .gameController:
+            return "gamecontroller"
+        case .bluetooth:
+            return "dot.radiowaves.left.and.right"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .headphones:
+            return Color(nsColor: .systemTeal)
+        case .mouse:
+            return Color(nsColor: .systemBlue)
+        case .keyboard:
+            return Color(nsColor: .systemIndigo)
+        case .trackpad:
+            return Color(nsColor: .systemPurple)
+        case .gameController:
+            return Color(nsColor: .systemPink)
+        case .bluetooth:
+            return Color(nsColor: .systemGray)
+        }
+    }
+}
+
+private struct PowerFlowMetricStrip: View {
+    let state: PopoverFlowState
+
+    var body: some View {
+        HStack(spacing: 10) {
+            metric(
+                label: "From Adapter",
+                value: adapterValue,
+                color: Color(nsColor: .systemGreen)
+            )
+
+            Divider()
+                .frame(height: 28)
+
+            metric(
+                label: "To System",
+                value: state.diagram.systemValue,
+                color: Color(nsColor: .systemBlue)
+            )
+
+            Divider()
+                .frame(height: 28)
+
+            metric(
+                label: batteryDirectionLabel,
+                value: state.diagram.batteryMagnitude,
+                color: batteryColor
+            )
+        }
+    }
+
+    private func metric(label: String, value: Double?, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Text(value.map(PowerFormatter.wattsString) ?? "--")
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.primary)
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var adapterValue: Double? {
+        state.diagram.adapterValue ?? (state.snapshot.adapterInputPower ?? state.snapshot.adapterPower)
+    }
+
+    private var batteryDirectionLabel: String {
+        state.diagram.batteryCharging ? "To Battery" : "From Battery"
+    }
+
+    private var batteryColor: Color {
+        state.diagram.batteryCharging
+            ? Color(nsColor: .systemIndigo)
+            : Color(nsColor: .systemOrange)
     }
 }
 
@@ -70,44 +297,45 @@ struct HistorySection: View {
         case adapter = "Adapter"
 
         var id: String { rawValue }
+
+        var shortLabel: String {
+            switch self {
+            case .system:
+                return "System"
+            case .thermal:
+                return "Thermal"
+            case .adapter:
+                return "Adapter"
+            }
+        }
     }
 
     var body: some View {
         let palette = PowerflowPalette(colorScheme: colorScheme)
 
-        CardContainer(padding: 12) {
-            VStack(alignment: .leading, spacing: 10) {
-                CardSectionHeader(
-                    title: "History"
-                )
+        CardContainer(padding: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    CardSectionHeader(title: "History")
 
-                PopoverInfoGroup {
-                    PopoverInfoRow("View") {
-                        Menu {
-                            ForEach(HistoryFocus.allCases) { item in
-                                Button {
-                                    focus = item
-                                } label: {
-                                    if item == focus {
-                                        Label(item.rawValue, systemImage: "checkmark")
-                                    } else {
-                                        Text(item.rawValue)
-                                    }
-                                }
-                            }
-                        } label: {
-                            SelectionMenuLabel(
-                                title: focus.rawValue,
-                                width: 148
-                            )
+                    Picker("View", selection: $focus) {
+                        ForEach(HistoryFocus.allCases) { item in
+                            Text(item.shortLabel).tag(item)
                         }
                     }
-
-                    Divider()
-
-                    historyContent(palette: palette)
-                        .padding(.vertical, 8)
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .frame(width: 184)
                 }
+                .padding(.horizontal, 12)
+                .padding(.top, 9)
+                .padding(.bottom, 7)
+
+                Divider()
+
+                historyContent(palette: palette)
+                    .padding(12)
             }
         }
     }
@@ -117,7 +345,7 @@ struct HistorySection: View {
         if !state.hasEnoughSamples {
             emptyState("Collecting samples…")
         } else if let chart = selectedChart {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 HistoryChartCard(model: chart, palette: palette)
 
                 if focus == .system {
@@ -168,13 +396,13 @@ struct AppEnergyOffendersView: View {
     let offenders: [PopoverOffenderRowState]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Text("Recent Offenders")
-                    .font(.caption)
+                Text("Impact")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("Impact")
+                Text("Recent")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.tertiary)
             }
@@ -218,12 +446,39 @@ private struct AppEnergyOffenderRow: View {
 
             Spacer(minLength: 8)
 
+            ImpactBar(value: offender.impactScore)
+                .frame(width: 82, height: 4)
+
             Text(offender.impactText)
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.primary)
                 .monospacedDigit()
+                .frame(width: 28, alignment: .trailing)
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(offender.name)
+        .accessibilityValue("\(offender.detailText), impact \(offender.impactText)")
+    }
+
+}
+
+private struct ImpactBar: View {
+    let value: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            let fillWidth = min(max(value / 20, 0), 1) * proxy.size.width
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.10))
+
+                Capsule()
+                    .fill(Color(nsColor: .systemBlue))
+                    .frame(width: fillWidth)
+            }
+        }
     }
 }
 
@@ -244,6 +499,7 @@ private struct AppEnergyOffenderIconView: View {
             }
         }
         .frame(width: 18, height: 18)
+        .accessibilityHidden(true)
     }
 }
 
@@ -260,7 +516,7 @@ struct PopoverInfoGroup<Content: View>: View {
         }
         .padding(.horizontal, 2)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.clear)
         )
     }
@@ -308,7 +564,7 @@ struct HistoryChartCard: View {
     let palette: PowerflowPalette
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(model.title)
                     .font(.caption)
@@ -319,16 +575,28 @@ struct HistoryChartCard: View {
                     .foregroundStyle(primaryColor)
             }
 
-            PowerSparkline(
-                values: model.primaryValues,
-                tint: primaryColor,
-                secondaryValues: model.secondaryValues,
-                secondaryTint: palette.fan,
-                cacheKey: model.cacheKey
-            )
+            ZStack(alignment: .topTrailing) {
+                PowerSparkline(
+                    values: model.primaryValues,
+                    tint: primaryColor,
+                    secondaryValues: model.secondaryValues,
+                    secondaryTint: palette.fan,
+                    cacheKey: model.cacheKey
+                )
+                .padding(.vertical, 2)
+                .padding(.horizontal, 2)
+
+                if let secondaryLabel = model.secondaryLabel,
+                   let secondaryRangeText = model.secondaryRangeText {
+                    FanOverlayBadge(
+                        label: secondaryLabel,
+                        value: secondaryRangeText,
+                        tint: palette.fan
+                    )
+                    .padding(6)
+                }
+            }
             .frame(height: model.height)
-            .padding(.vertical, 4)
-            .padding(.horizontal, 2)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color.white.opacity(0.04))
@@ -345,6 +613,9 @@ struct HistoryChartCard: View {
                 chartStat(label: secondaryLabel, value: secondaryRangeText)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(model.title)
+        .accessibilityValue(accessibilityValue)
     }
 
     private func chartStat(label: String, value: String) -> some View {
@@ -368,6 +639,62 @@ struct HistoryChartCard: View {
         case .adapter:
             return palette.adapter
         }
+    }
+
+    private var accessibilityValue: String {
+        var parts = [
+            "Current \(model.latestValueText)",
+            "minimum \(model.minValueText)",
+            "maximum \(model.maxValueText)",
+        ]
+        if let secondaryLabel = model.secondaryLabel,
+           let secondaryRangeText = model.secondaryRangeText {
+            parts.append("\(secondaryLabel) \(secondaryRangeText)")
+        }
+        return parts.joined(separator: ", ")
+    }
+}
+
+private struct FanOverlayBadge: View {
+    let label: String
+    let value: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            DashedLegendSwatch(tint: tint)
+                .frame(width: 18, height: 8)
+
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.caption2.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(tint.opacity(0.28), lineWidth: 1)
+        )
+    }
+}
+
+private struct DashedLegendSwatch: View {
+    let tint: Color
+
+    var body: some View {
+        Path { path in
+            path.move(to: CGPoint(x: 1, y: 4))
+            path.addLine(to: CGPoint(x: 17, y: 4))
+        }
+        .stroke(
+            tint,
+            style: StrokeStyle(lineWidth: 1.4, lineCap: .round, dash: [4, 3])
+        )
     }
 }
 
@@ -453,11 +780,13 @@ struct PowerSparkline: View {
                 }
             }
         }
+        .accessibilityHidden(true)
     }
 }
 
 private final class SparklinePointCache {
     static let shared = SparklinePointCache()
+    private let maxEntries = 96
 
     struct CachedPoints {
         let primary: [Double]
@@ -466,6 +795,7 @@ private final class SparklinePointCache {
     }
 
     private var entries: [String: CachedPoints] = [:]
+    private var accessOrder: [String] = []
 
     func points(
         values: [Double],
@@ -477,6 +807,7 @@ private final class SparklinePointCache {
         let widthBucket = max(Int((width / 8).rounded(.down)) * 8, 8)
         let cacheID = "\(cacheKey)-\(widthBucket)"
         if let cached = entries[cacheID] {
+            markAccess(cacheID)
             return cached
         }
 
@@ -485,7 +816,21 @@ private final class SparklinePointCache {
         let secondary = secondaryValues.map { downsample(values: $0, target: target) }
         let cached = CachedPoints(primary: primary, primaryMax: primary.max(), secondary: secondary)
         entries[cacheID] = cached
+        markAccess(cacheID)
+        pruneIfNeeded()
         return cached
+    }
+
+    private func markAccess(_ cacheID: String) {
+        accessOrder.removeAll { $0 == cacheID }
+        accessOrder.append(cacheID)
+    }
+
+    private func pruneIfNeeded() {
+        while entries.count > maxEntries, let oldest = accessOrder.first {
+            accessOrder.removeFirst()
+            entries.removeValue(forKey: oldest)
+        }
     }
 
     private func downsample(values: [Double], target: Int) -> [Double] {
@@ -545,7 +890,7 @@ struct CardContainer<Content: View>: View {
     }
 
     var body: some View {
-        let cardShape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        let cardShape = RoundedRectangle(cornerRadius: 8, style: .continuous)
 
         if snapshotRendering {
             fallbackBody(cardShape: cardShape)
@@ -846,8 +1191,11 @@ struct PowerFlowView: View {
                 }
             }
         }
-        .frame(height: 166)
-        .padding(.horizontal, 12)
+        .frame(height: 124)
+        .padding(.horizontal, 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Power flow")
+        .accessibilityValue(accessibilityValue(for: state.diagram))
     }
 
     private func flowDiagram(
@@ -948,6 +1296,21 @@ struct PowerFlowView: View {
         let progress = date.timeIntervalSinceReferenceDate / animationDuration
         let phase = progress.truncatingRemainder(dividingBy: 1) * Double(dashCycle)
         return -CGFloat(phase)
+    }
+
+    private func accessibilityValue(for flow: FlowDiagramState) -> String {
+        var parts: [String] = []
+        if let adapterValue = flow.adapterValue {
+            parts.append("adapter \(PowerFormatter.wattsString(adapterValue))")
+        }
+        parts.append("system \(PowerFormatter.wattsString(flow.systemValue))")
+        if flow.batteryActive {
+            let direction = flow.batteryCharging ? "charging" : "discharging"
+            parts.append("battery \(direction) \(PowerFormatter.wattsString(flow.batteryMagnitude))")
+        } else if let batteryValue = flow.batteryValue {
+            parts.append("battery \(PowerFormatter.wattsString(batteryValue))")
+        }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -1066,16 +1429,16 @@ struct FlowEndpoint: View {
         let iconView = ZStack {
             Circle()
                 .fill(color.opacity(isActive ? 0.12 : 0.05))
-                .frame(width: 48, height: 48)
+                .frame(width: 40, height: 40)
             if let iconImage {
                 Image(nsImage: iconImage)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 28, height: 15)
+                    .frame(width: 24, height: 13)
                     .foregroundStyle(color)
             } else {
                 Image(systemName: icon)
-                    .font(.title3)
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(color)
             }
         }
@@ -1101,11 +1464,11 @@ struct FlowEndpoint: View {
         let content = Group {
             switch layout {
             case .stacked:
-                VStack(spacing: 8) {
+                VStack(spacing: 5) {
                     iconView
                     textView
                 }
-                .frame(minWidth: 72)
+                .frame(minWidth: 62)
             case .side:
                 HStack(spacing: 10) {
                     iconView
@@ -1249,8 +1612,9 @@ struct PowerflowPalette {
 }
 
 struct StatusPopoverView_Previews: PreviewProvider {
+    @MainActor
     static var previews: some View {
-        StatusPopoverView()
+        StatusPopoverView(appState: .shared)
             .padding()
             .background(Color.blue)
     }

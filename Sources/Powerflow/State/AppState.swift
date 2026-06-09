@@ -2,6 +2,7 @@ import Combine
 import CoreGraphics
 import Foundation
 
+@MainActor
 final class AppState: ObservableObject {
     static let shared = AppState()
 
@@ -104,13 +105,15 @@ final class AppState: ObservableObject {
             )
         )
         monitor.onUpdate = { [weak self] snapshot in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.apply(snapshot)
             }
         }
         monitor.onWarmupCompleted = { [weak self] in
-            guard let self else { return }
-            self.warmupStore.markCompleted(for: self.modelIdentifier)
+            Task { @MainActor in
+                guard let self else { return }
+                self.warmupStore.markCompleted(for: self.modelIdentifier)
+            }
         }
 
         syncLaunchAtLoginPreference()
@@ -152,13 +155,15 @@ final class AppState: ObservableObject {
             )
         )
         monitor.onUpdate = { [weak self] snapshot in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.apply(snapshot)
             }
         }
         monitor.onWarmupCompleted = { [weak self] in
-            guard let self else { return }
-            self.warmupStore.markCompleted(for: self.modelIdentifier)
+            Task { @MainActor in
+                guard let self else { return }
+                self.warmupStore.markCompleted(for: self.modelIdentifier)
+            }
         }
     }
 
@@ -176,6 +181,11 @@ final class AppState: ObservableObject {
         )
     }
 
+    func stop() {
+        monitor.stop()
+        powerSourceMonitor.stop()
+    }
+
     private func apply(_ snapshot: PowerSnapshot) {
         guard let acceptedSnapshot = resolveSnapshot(snapshot) else { return }
         latestSnapshot = acceptedSnapshot
@@ -186,14 +196,14 @@ final class AppState: ObservableObject {
             || statusSnapshot.isExternalPowerConnected != acceptedSnapshot.isExternalPowerConnected {
             statusSnapshot = acceptedSnapshot
         }
+        if self.snapshot != acceptedSnapshot {
+            self.snapshot = acceptedSnapshot
+        }
         appendHistory(acceptedSnapshot)
         refreshStatusBarTitle(using: acceptedSnapshot)
 
         guard isPopoverVisible else { return }
         refreshPopoverState(using: acceptedSnapshot)
-        if self.snapshot != acceptedSnapshot {
-            self.snapshot = acceptedSnapshot
-        }
     }
 
     private func refreshStatusBarTitle(using snapshot: PowerSnapshot) {
@@ -205,14 +215,6 @@ final class AppState: ObservableObject {
 
     private func handleSettingsChange(from oldValue: PowerSettings) {
         guard !isApplyingSettingsChange else { return }
-        guard Thread.isMainThread else {
-            let newSettings = settings
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.settings != newSettings else { return }
-                self.settings = newSettings
-            }
-            return
-        }
 
         let resolvedSettings = settings.clamped()
         if resolvedSettings != settings {
@@ -231,8 +233,13 @@ final class AppState: ObservableObject {
 
         persistSettings(resolvedSettings)
         monitor.applySettings(resolvedSettings, isPopoverVisible: isPopoverVisible)
+        let clearedAppEnergyOffenders = oldValue.showAppEnergyOffenders
+            && !resolvedSettings.showAppEnergyOffenders
+        if clearedAppEnergyOffenders {
+            clearAppEnergyOffenders()
+        }
         refreshStatusBarTitle(using: latestSnapshot)
-        if isPopoverVisible {
+        if isPopoverVisible || clearedAppEnergyOffenders {
             refreshPopoverState(using: latestSnapshot)
         }
     }
@@ -255,6 +262,20 @@ final class AppState: ObservableObject {
 
     private func persistSettings(_ newSettings: PowerSettings) {
         settingsStore.save(newSettings)
+    }
+
+    private func clearAppEnergyOffenders() {
+        latestSnapshot.appEnergyOffenders = []
+        if !snapshot.appEnergyOffenders.isEmpty {
+            snapshot.appEnergyOffenders = []
+        }
+        if !statusSnapshot.appEnergyOffenders.isEmpty {
+            statusSnapshot.appEnergyOffenders = []
+        }
+        if var pendingSnapshot {
+            pendingSnapshot.bestSnapshot.appEnergyOffenders = []
+            self.pendingSnapshot = pendingSnapshot
+        }
     }
 
     private func appendHistory(_ snapshot: PowerSnapshot) {
@@ -355,12 +376,15 @@ final class AppState: ObservableObject {
     }
 
     private func makePopoverState(snapshot: PowerSnapshot, settings: PowerSettings) -> PopoverViewState {
-        let offenders = makeOffenderRows(from: snapshot.appEnergyOffenders)
+        let offenders = settings.showAppEnergyOffenders
+            ? makeOffenderRows(from: snapshot.appEnergyOffenders)
+            : []
         AppIconCache.shared.prefetch(paths: offenders.compactMap(\.iconPath))
 
         return PopoverViewState(
             overview: makeOverviewState(snapshot: snapshot, settings: settings),
             flow: makeFlowState(snapshot: snapshot),
+            connectedDevices: makeConnectedDevicesState(snapshot: snapshot),
             history: makeHistoryState(offenders: offenders)
         )
     }
@@ -420,7 +444,7 @@ final class AppState: ObservableObject {
                 values: systemSeries,
                 formatter: PowerFormatter.wattsString,
                 secondary: secondarySeries,
-                height: 90,
+                height: 72,
                 revision: revision
             ),
             thermalChart: makeHistoryChartState(
@@ -430,7 +454,7 @@ final class AppState: ObservableObject {
                 values: temperatureSeries,
                 formatter: formatTemperature,
                 secondary: secondarySeries,
-                height: 90,
+                height: 72,
                 revision: revision
             ),
             adapterChart: makeHistoryChartState(
@@ -440,10 +464,31 @@ final class AppState: ObservableObject {
                 values: inputSeries,
                 formatter: PowerFormatter.wattsString,
                 secondary: nil,
-                height: 90,
+                height: 72,
                 revision: revision
             ),
             offenders: offenders
+        )
+    }
+
+    private func makeConnectedDevicesState(snapshot: PowerSnapshot) -> PopoverConnectedDevicesState {
+        let visibleLimit = 4
+        let devices = snapshot.connectedDevices
+        let rows = devices.prefix(visibleLimit).map { device in
+            PopoverConnectedDeviceRowState(
+                id: device.id,
+                name: device.name,
+                detailText: connectedDeviceDetailText(for: device),
+                batteryText: device.batteryPercent.map { "\($0)%" } ?? "--",
+                batteryPercent: device.batteryPercent,
+                kind: device.kind
+            )
+        }
+        let hiddenCount = max(0, devices.count - rows.count)
+        return PopoverConnectedDevicesState(
+            devices: Array(rows),
+            hiddenDeviceCount: hiddenCount,
+            summaryText: connectedDevicesSummaryText(devices)
         )
     }
 
@@ -512,10 +557,28 @@ final class AppState: ObservableObject {
                 id: offender.id,
                 name: offender.name,
                 detailText: "\(processText)\(String(format: "%.0f%%", offender.cpuPercent)) CPU · \(memoryText)",
+                impactScore: offender.impactScore,
                 impactText: String(format: offender.impactScore >= 10 ? "%.0f" : "%.1f", offender.impactScore),
                 iconPath: offender.iconPath
             )
         }
+    }
+
+    private func connectedDeviceDetailText(for device: ConnectedPowerDevice) -> String {
+        var parts = [device.transport ?? "Connected"]
+        if let detail = device.detail {
+            parts.append(detail)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func connectedDevicesSummaryText(_ devices: [ConnectedPowerDevice]) -> String {
+        guard !devices.isEmpty else { return "No devices" }
+        let countText = devices.count == 1 ? "1 device" : "\(devices.count) devices"
+        guard let lowest = devices.compactMap(\.batteryPercent).min() else {
+            return countText
+        }
+        return "\(countText) · low \(lowest)%"
     }
 
     private func overviewPowerLabel(snapshot: PowerSnapshot, settings: PowerSettings) -> String {

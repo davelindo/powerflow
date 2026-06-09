@@ -1,6 +1,7 @@
 import Foundation
 import IOKit.ps
 
+@MainActor
 final class PowerSourceMonitor {
     private var runLoopSource: CFRunLoopSource?
     private let handler: () -> Void
@@ -14,7 +15,9 @@ final class PowerSourceMonitor {
         let callback: IOPowerSourceCallbackType = { context in
             guard let context else { return }
             let monitor = Unmanaged<PowerSourceMonitor>.fromOpaque(context).takeUnretainedValue()
-            monitor.handleChange()
+            MainActor.assumeIsolated {
+                monitor.handleChange()
+            }
         }
         let context = Unmanaged.passUnretained(self).toOpaque()
         guard let source = IOPSCreateLimitedPowerNotification(callback, context)?.takeRetainedValue() else { return }
@@ -33,6 +36,8 @@ final class PowerSourceMonitor {
     }
 
     deinit {
-        stop()
+        MainActor.assumeIsolated {
+            stop()
+        }
     }
 }
