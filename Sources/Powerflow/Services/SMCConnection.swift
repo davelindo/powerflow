@@ -6,7 +6,6 @@ private let kSMCUserClient = UInt32(0)
 private let kSMCIndex = UInt32(2)
 private let kSMCCmdReadKeyInfo = UInt8(9)
 private let kSMCCmdReadBytes = UInt8(5)
-private let kSMCCmdWriteBytes = UInt8(6)
 private let smcTypeTrimSet = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
 
 private typealias SMCBytes32 = (
@@ -103,10 +102,7 @@ struct SMCValue {
         switch dataType {
         case "flt":
             guard bytes.count >= 4 else { return nil }
-            let raw = UInt32(bytes[0])
-                | (UInt32(bytes[1]) << 8)
-                | (UInt32(bytes[2]) << 16)
-                | (UInt32(bytes[3]) << 24)
+            let raw = Self.bigEndianUInt32(bytes)
             return Double(Float32(bitPattern: raw))
         case "si8":
             guard let value = bytes.first else { return nil }
@@ -116,40 +112,25 @@ struct SMCValue {
             return Double(value)
         case "si16":
             guard bytes.count >= 2 else { return nil }
-            let raw = UInt16(bytes[0]) | (UInt16(bytes[1]) << 8)
+            let raw = Self.bigEndianUInt16(bytes)
             return Double(Int16(bitPattern: raw))
         case "ui16":
             guard bytes.count >= 2 else { return nil }
-            let raw = UInt16(bytes[0]) | (UInt16(bytes[1]) << 8)
-            return Double(raw)
+            return Double(Self.bigEndianUInt16(bytes))
         case "si32":
             guard bytes.count >= 4 else { return nil }
-            let raw = UInt32(bytes[0])
-                | (UInt32(bytes[1]) << 8)
-                | (UInt32(bytes[2]) << 16)
-                | (UInt32(bytes[3]) << 24)
+            let raw = Self.bigEndianUInt32(bytes)
             return Double(Int32(bitPattern: raw))
         case "ui32":
             guard bytes.count >= 4 else { return nil }
-            let raw = UInt32(bytes[0])
-                | (UInt32(bytes[1]) << 8)
-                | (UInt32(bytes[2]) << 16)
-                | (UInt32(bytes[3]) << 24)
-            return Double(raw)
+            return Double(Self.bigEndianUInt32(bytes))
         case "si64":
             guard bytes.count >= 8 else { return nil }
-            var raw: UInt64 = 0
-            for index in 0..<8 {
-                raw |= UInt64(bytes[index]) << (UInt64(index) * 8)
-            }
+            let raw = Self.bigEndianUInt64(bytes)
             return Double(Int64(bitPattern: raw))
         case "ui64":
             guard bytes.count >= 8 else { return nil }
-            var raw: UInt64 = 0
-            for index in 0..<8 {
-                raw |= UInt64(bytes[index]) << (UInt64(index) * 8)
-            }
-            return Double(raw)
+            return Double(Self.bigEndianUInt64(bytes))
         case "flag":
             guard let value = bytes.first else { return nil }
             return value == 0 ? 0 : 1
@@ -175,12 +156,31 @@ struct SMCValue {
     private func fixedPointValue(type: String) -> Double? {
         guard bytes.count >= 2 else { return nil }
         guard let (divisor, signed) = Self.fixedPointDivisors[type] else { return nil }
-        let raw = UInt16(bytes[0]) | (UInt16(bytes[1]) << 8)
+        let raw = Self.bigEndianUInt16(bytes)
         if signed {
             let signedValue = Int16(bitPattern: raw)
             return Double(signedValue) / divisor
         }
         return Double(raw) / divisor
+    }
+
+    private static func bigEndianUInt16(_ bytes: [UInt8]) -> UInt16 {
+        (UInt16(bytes[0]) << 8) | UInt16(bytes[1])
+    }
+
+    private static func bigEndianUInt32(_ bytes: [UInt8]) -> UInt32 {
+        (UInt32(bytes[0]) << 24)
+            | (UInt32(bytes[1]) << 16)
+            | (UInt32(bytes[2]) << 8)
+            | UInt32(bytes[3])
+    }
+
+    private static func bigEndianUInt64(_ bytes: [UInt8]) -> UInt64 {
+        var raw: UInt64 = 0
+        for index in 0..<8 {
+            raw = (raw << 8) | UInt64(bytes[index])
+        }
+        return raw
     }
 
     private static let fixedPointDivisors: [String: (Double, Bool)] = [
@@ -236,6 +236,8 @@ final class SMCConnection {
     func readKey(_ key: String) -> SMCValue? {
         let keyInt = keyToUInt32(key)
         guard let keyInfo = getKeyInfo(keyInt) else { return nil }
+        let dataSize = Int(keyInfo.dataSize)
+        guard (1...32).contains(dataSize) else { return nil }
 
         var input = SMCKeyData()
         input.key = keyInt
@@ -248,31 +250,10 @@ final class SMCConnection {
         let dataType = cachedDataType(for: keyInt, info: keyInfo)
         return SMCValue(
             key: key,
-            dataSize: Int(keyInfo.dataSize),
+            dataSize: dataSize,
             dataType: dataType,
             bytes: bytes
         )
-    }
-
-    func writeKey(_ key: String, bytes: [UInt8]) -> Bool {
-        let keyInt = keyToUInt32(key)
-        guard let keyInfo = getKeyInfo(keyInt) else { return false }
-        let size = Int(keyInfo.dataSize)
-        guard size > 0 else { return false }
-
-        var input = SMCKeyData()
-        input.key = keyInt
-        input.keyInfo = keyInfo
-        input.data8 = kSMCCmdWriteBytes
-
-        var payload = [UInt8](repeating: 0, count: 32)
-        let count = min(size, bytes.count, payload.count)
-        if count > 0 {
-            payload.replaceSubrange(0..<count, with: bytes.prefix(count))
-        }
-        input.bytes = bytesTuple(from: payload)
-
-        return call(input: input) != nil
     }
 
     private func getKeyInfo(_ key: UInt32) -> SMCKeyInfo? {
@@ -284,7 +265,8 @@ final class SMCConnection {
         input.key = key
         input.data8 = kSMCCmdReadKeyInfo
 
-        guard let output = call(input: input) else { return nil }
+        guard let output = call(input: input),
+              (1...32).contains(Int(output.keyInfo.dataSize)) else { return nil }
         let info = output.keyInfo
         keyInfoCache[key] = info
         return info
@@ -317,7 +299,10 @@ final class SMCConnection {
             }
         }
 
-        guard result == KERN_SUCCESS else { return nil }
+        // macOS 26/27 can report KERN_SUCCESS while the SMC payload carries a failure byte.
+        guard result == KERN_SUCCESS,
+              output.result == 0,
+              output.status == 0 else { return nil }
         return output
     }
 }

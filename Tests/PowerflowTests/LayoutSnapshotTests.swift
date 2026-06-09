@@ -59,6 +59,7 @@ final class LayoutSnapshotTests: XCTestCase {
 }
 
 private enum LayoutSnapshotFixtures {
+    @MainActor
     static func makeAppState() -> AppState {
         var settings = PowerSettings.default
         settings.statusBarItem = .system
@@ -159,6 +160,35 @@ private enum LayoutSnapshotFixtures {
                 pageinsPerSecond: 0.0
             ),
         ]
+        snapshot.connectedDevices = [
+            ConnectedPowerDevice(
+                id: "airpods-pro",
+                name: "Sample AirPods Pro",
+                kind: .headphones,
+                transport: "Bluetooth",
+                batteryPercent: 76,
+                isConnected: true,
+                detail: "L 78% · R 76% · Case 64%"
+            ),
+            ConnectedPowerDevice(
+                id: "magic-mouse",
+                name: "Magic Mouse",
+                kind: .mouse,
+                transport: "Bluetooth",
+                batteryPercent: 52,
+                isConnected: true,
+                detail: nil
+            ),
+            ConnectedPowerDevice(
+                id: "magic-keyboard",
+                name: "Magic Keyboard",
+                kind: .keyboard,
+                transport: "Bluetooth",
+                batteryPercent: 91,
+                isConnected: true,
+                detail: nil
+            ),
+        ]
 
         var smc = SMCPowerData.empty
         smc.systemTotal = 34.6
@@ -209,7 +239,8 @@ private enum LayoutSnapshotFixtures {
 }
 
 private enum LayoutSnapshotHarness {
-    private static let modeFileURL = URL(fileURLWithPath: "/tmp/powerflow-layout-snapshot-mode")
+    private static let modeFileURL = ProcessInfo.processInfo.environment["POWERFLOW_LAYOUT_SNAPSHOT_MODE_FILE"]
+        .map { URL(fileURLWithPath: $0) }
     private static let mode = SnapshotMode.current(
         environment: ProcessInfo.processInfo.environment,
         arguments: CommandLine.arguments,
@@ -221,6 +252,7 @@ private enum LayoutSnapshotHarness {
     static let featureAssetSize = CGSize(width: 370, height: 504)
     private static let meanDeltaTolerance = 0.003
     private static let changedPixelTolerance = 0.015
+    private static let renderScale = 2.0
 
     static func assertSnapshot<V: View>(
         named name: String,
@@ -309,9 +341,21 @@ private enum LayoutSnapshotHarness {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         hostingView.displayIfNeeded()
 
-        guard let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else {
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(size.width * renderScale),
+            pixelsHigh: Int(size.height * renderScale),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else {
             fatalError("Unable to create bitmap rep for layout snapshot")
         }
+        bitmap.size = size
         hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
 
         let image = NSImage(size: size)
@@ -485,8 +529,13 @@ private enum SnapshotMode: String {
     static func current(
         environment: [String: String],
         arguments: [String],
-        modeFileURL: URL
+        modeFileURL: URL?
     ) -> SnapshotMode? {
+        #if POWERFLOW_RECORD_LAYOUT_SNAPSHOTS
+        return .record
+        #elseif POWERFLOW_VERIFY_LAYOUT_SNAPSHOTS
+        return .verify
+        #else
         if environment["POWERFLOW_RECORD_SNAPSHOTS"] == "1" || arguments.contains("--powerflow-record-snapshots") {
             return .record
         }
@@ -495,6 +544,7 @@ private enum SnapshotMode: String {
             return .verify
         }
 
+        guard let modeFileURL else { return nil }
         guard let modeValue = try? String(contentsOf: modeFileURL, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines),
               let mode = SnapshotMode(rawValue: modeValue) else {
@@ -502,6 +552,7 @@ private enum SnapshotMode: String {
         }
 
         return mode
+        #endif
     }
 }
 

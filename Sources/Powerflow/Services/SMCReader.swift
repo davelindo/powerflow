@@ -496,15 +496,15 @@ final class SMCReader {
         for key in keys where !seen.contains(key) {
             seen.insert(key)
             guard let value = connection.readKey(key)?.floatValue() else { continue }
-            if !useCachedKeys {
-                discoveredKeys.append(key)
-            }
             // Normalize temperature: some keys report tenths of degrees
             let normalizedValue = value > 1000 ? value / 10.0 : value
             // Validate temperature is in reasonable range (0-150°C)
-            if normalizedValue > maxTemp,
-               normalizedValue > PowerflowConstants.minValidTemperature,
-               normalizedValue < PowerflowConstants.maxValidCpuTemperature {
+            let isValid = normalizedValue > PowerflowConstants.minValidTemperature
+                && normalizedValue < PowerflowConstants.maxValidCpuTemperature
+            if isValid, !useCachedKeys {
+                discoveredKeys.append(key)
+            }
+            if isValid, normalizedValue > maxTemp {
                 maxTemp = normalizedValue
                 maxKey = key
             }
@@ -519,6 +519,13 @@ final class SMCReader {
                 didScanCpuTempKeys = false
                 lastCpuTempScanFailure = now
             }
+        }
+
+        if useCachedKeys, maxTemp <= 0 {
+            cachedCpuTempKeys = []
+            didScanCpuTempKeys = false
+            lastCpuTempScanFailure = now
+            return nil
         }
 
         return maxTemp > 0 ? (maxTemp, maxKey) : nil

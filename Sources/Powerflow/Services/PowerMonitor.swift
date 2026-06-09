@@ -92,6 +92,29 @@ final class PowerMonitor {
         requestUpdate(detailLevelOverride: detailLevelOverride, countWarmup: countWarmup)
     }
 
+    func stop() {
+        runOnUpdateQueue { [weak self] in
+            guard let self else { return }
+            self.cancelTimer()
+        }
+    }
+
+    deinit {
+        if DispatchQueue.getSpecific(key: updateQueueKey) != nil {
+            cancelTimer()
+        } else {
+            updateQueue.sync {
+                cancelTimer()
+            }
+        }
+    }
+
+    private func cancelTimer() {
+        timer?.cancel()
+        timer = nil
+        warmupState = nil
+    }
+
     private func requestUpdate(
         detailLevelOverride: PowerSnapshotDetailLevel? = nil,
         countWarmup: Bool = true

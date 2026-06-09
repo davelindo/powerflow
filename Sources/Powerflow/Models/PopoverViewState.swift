@@ -64,8 +64,28 @@ struct PopoverOffenderRowState: Identifiable, Equatable {
     let id: String
     let name: String
     let detailText: String
+    let impactScore: Double
     let impactText: String
     let iconPath: String?
+}
+
+struct PopoverConnectedDeviceRowState: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let detailText: String
+    let batteryText: String
+    let batteryPercent: Int?
+    let kind: ConnectedDeviceKind
+}
+
+struct PopoverConnectedDevicesState: Equatable {
+    let devices: [PopoverConnectedDeviceRowState]
+    let hiddenDeviceCount: Int
+    let summaryText: String
+
+    var isEmpty: Bool {
+        devices.isEmpty
+    }
 }
 
 struct PopoverHistoryState: Equatable {
@@ -79,6 +99,7 @@ struct PopoverHistoryState: Equatable {
 struct PopoverViewState: Equatable {
     let overview: PopoverOverviewState
     let flow: PopoverFlowState
+    let connectedDevices: PopoverConnectedDevicesState
     let history: PopoverHistoryState
 
     static let empty = PopoverViewState(
@@ -95,6 +116,11 @@ struct PopoverViewState: Equatable {
             batteryLevelPrecise: 0,
             batteryOverlay: .none
         ),
+        connectedDevices: PopoverConnectedDevicesState(
+            devices: [],
+            hiddenDeviceCount: 0,
+            summaryText: "No devices"
+        ),
         history: PopoverHistoryState(
             hasEnoughSamples: false,
             systemChart: nil,
@@ -105,6 +131,7 @@ struct PopoverViewState: Equatable {
     )
 }
 
+@MainActor
 final class PopoverStateStore: ObservableObject {
     @Published private(set) var state = PopoverViewState.empty
 

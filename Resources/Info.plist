@@ -4,10 +4,14 @@
 <dict>
   <key>CFBundleDisplayName</key>
   <string>Powerflow</string>
+  <key>CFBundleExecutable</key>
+  <string>$(EXECUTABLE_NAME)</string>
   <key>CFBundleIdentifier</key>
   <string>com.powerflow.app</string>
   <key>CFBundleName</key>
   <string>Powerflow</string>
+  <key>CFBundlePackageType</key>
+  <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
   <key>CFBundleShortVersionString</key>
   <string>0.1.0</string>
   <key>CFBundleVersion</key>
@@ -20,5 +24,7 @@
   <true/>
   <key>NSHumanReadableCopyright</key>
   <string>MIT License</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Powerflow reads connected device battery levels.</string>
 </dict>
 </plist>

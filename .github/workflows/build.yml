@@ -7,9 +7,31 @@ on:
 jobs:
   build:
     runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      XCODEGEN_VERSION: 2.45.4
+      XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Install XcodeGen
+        run: |
+          curl -L "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" -o "$RUNNER_TEMP/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/xcodegen/bin:$PATH"
+          INSTALLED_XCODEGEN_VERSION="$(xcodegen --version | awk '{print $2}')"
+          test "$INSTALLED_XCODEGEN_VERSION" = "$XCODEGEN_VERSION"
+
+      - name: Validate generated project
+        run: |
+          xcodegen generate
+          git diff --exit-code Powerflow.xcodeproj
 
       - name: Xcode version
         run: xcodebuild -version
@@ -21,3 +43,6 @@ jobs:
             -scheme Powerflow \
             -destination "platform=macOS" \
             test
+
+      - name: Verify layout snapshots
+        run: ./scripts/verify_layout_snapshots.sh

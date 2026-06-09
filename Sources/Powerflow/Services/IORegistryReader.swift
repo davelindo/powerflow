@@ -2,36 +2,42 @@ import Foundation
 import IOKit
 
 struct PowerTelemetry: Equatable {
-    var adapterEfficiencyLoss: Int
-    var batteryPower: Int
-    var systemCurrentIn: Int
-    var systemEnergyConsumed: Int
-    var systemLoad: Int
-    var systemPowerIn: Int
-    var systemVoltageIn: Int
+    var adapterEfficiencyLoss: Int?
+    var batteryPower: Int?
+    var systemCurrentIn: Int?
+    var systemEnergyConsumed: Int?
+    var systemLoad: Int?
+    var systemPowerIn: Int?
+    var systemVoltageIn: Int?
 
     static let empty = PowerTelemetry(
-        adapterEfficiencyLoss: 0,
-        batteryPower: 0,
-        systemCurrentIn: 0,
-        systemEnergyConsumed: 0,
-        systemLoad: 0,
-        systemPowerIn: 0,
-        systemVoltageIn: 0
+        adapterEfficiencyLoss: nil,
+        batteryPower: nil,
+        systemCurrentIn: nil,
+        systemEnergyConsumed: nil,
+        systemLoad: nil,
+        systemPowerIn: nil,
+        systemVoltageIn: nil
     )
 
     var hasSystemPowerData: Bool {
-        systemPowerIn != 0
-            || systemLoad != 0
-            || systemCurrentIn != 0
-            || systemVoltageIn != 0
-            || systemEnergyConsumed != 0
+        systemPowerIn != nil || systemLoad != nil
     }
 
-    var adapterEfficiencyLossWatts: Double { Double(adapterEfficiencyLoss) / 1000.0 }
-    var batteryPowerWatts: Double { Double(batteryPower) / 1000.0 }
-    var systemPowerInWatts: Double { Double(systemPowerIn) / 1000.0 }
-    var systemLoadWatts: Double { Double(systemLoad) / 1000.0 }
+    var hasAnyTelemetryData: Bool {
+        adapterEfficiencyLoss != nil
+            || batteryPower != nil
+            || systemCurrentIn != nil
+            || systemEnergyConsumed != nil
+            || systemLoad != nil
+            || systemPowerIn != nil
+            || systemVoltageIn != nil
+    }
+
+    var adapterEfficiencyLossWatts: Double? { adapterEfficiencyLoss.map { Double($0) / 1000.0 } }
+    var batteryPowerWatts: Double? { batteryPower.map { Double($0) / 1000.0 } }
+    var systemPowerInWatts: Double? { systemPowerIn.map { Double($0) / 1000.0 } }
+    var systemLoadWatts: Double? { systemLoad.map { Double($0) / 1000.0 } }
 }
 
 enum BatteryCapacityUnits: String, Equatable {
@@ -202,7 +208,8 @@ final class IORegistryReader {
         let name = stringValue(dict, keys: ["Name", "AdapterName", "Description"])
         let manufacturer = stringValue(dict, keys: ["Manufacturer", "VendorName"])
         let model = stringValue(dict, keys: ["Model", "ModelID", "ProductName"])
-        let serialNumber = stringValue(dict, keys: ["SerialNumber", "Serial"])
+        // Do not surface hardware serials in telemetry or UI state.
+        let serialNumber: String? = nil
         let familyCode = stringValue(dict, keys: ["FamilyCode"])
         let adapterID = stringValue(dict, keys: ["AdapterID", "AdapterId"])
         let vendorID = stringValue(dict, keys: ["VendorID", "VendorId"])
@@ -267,7 +274,8 @@ final class IORegistryReader {
         let name = stringValue(from: dict, keys: ["DeviceName", "ProductName", "BatteryType"], fallback: batteryData)
         let manufacturer = stringValue(from: dict, keys: ["Manufacturer", "ManufacturerName"], fallback: batteryData)
         let model = stringValue(from: dict, keys: ["ModelNumber", "Model", "BatteryModel"], fallback: batteryData)
-        let serial = stringValue(from: dict, keys: ["Serial", "SerialNumber", "BatterySerialNumber"], fallback: batteryData)
+        // Do not surface hardware serials in telemetry or UI state.
+        let serial: String? = nil
         let firmware = stringValue(from: dict, keys: ["FirmwareVersion", "FirmwareRevision"], fallback: batteryData)
         let hardware = stringValue(from: dict, keys: ["HardwareRevision", "HardwareVersion"], fallback: batteryData)
         let cycleCount = intValue(from: dict, key: "CycleCount", fallback: batteryData)
@@ -297,13 +305,24 @@ final class IORegistryReader {
         guard let telemetry = dict["PowerTelemetryData"] as? NSDictionary else {
             return nil
         }
-        let adapterEfficiencyLoss = intValue(telemetry, key: "AdapterEfficiencyLoss") ?? 0
-        let batteryPower = intValue(telemetry, key: "BatteryPower") ?? 0
-        let systemCurrentIn = intValue(telemetry, key: "SystemCurrentIn") ?? 0
-        let systemEnergyConsumed = intValue(telemetry, key: "SystemEnergyConsumed") ?? 0
-        let systemLoad = intValue(telemetry, key: "SystemLoad") ?? 0
-        let systemPowerIn = intValue(telemetry, key: "SystemPowerIn") ?? 0
-        let systemVoltageIn = intValue(telemetry, key: "SystemVoltageIn") ?? 0
+        let adapterEfficiencyLoss = intValue(telemetry, key: "AdapterEfficiencyLoss")
+        let batteryPower = intValue(telemetry, key: "BatteryPower")
+        let systemCurrentIn = intValue(telemetry, key: "SystemCurrentIn")
+        let systemEnergyConsumed = intValue(telemetry, key: "SystemEnergyConsumed")
+        let systemLoad = intValue(telemetry, key: "SystemLoad")
+        let systemPowerIn = intValue(telemetry, key: "SystemPowerIn")
+        let systemVoltageIn = intValue(telemetry, key: "SystemVoltageIn")
+        guard [
+            adapterEfficiencyLoss,
+            batteryPower,
+            systemCurrentIn,
+            systemEnergyConsumed,
+            systemLoad,
+            systemPowerIn,
+            systemVoltageIn,
+        ].contains(where: { $0 != nil }) else {
+            return nil
+        }
 
         return PowerTelemetry(
             adapterEfficiencyLoss: adapterEfficiencyLoss,

@@ -65,6 +65,25 @@ struct AppEnergyOffender: Equatable, Identifiable {
     var id: String { groupID }
 }
 
+enum ConnectedDeviceKind: String, Equatable {
+    case headphones
+    case mouse
+    case keyboard
+    case trackpad
+    case gameController
+    case bluetooth
+}
+
+struct ConnectedPowerDevice: Equatable, Identifiable {
+    let id: String
+    let name: String
+    let kind: ConnectedDeviceKind
+    let transport: String?
+    let batteryPercent: Int?
+    let isConnected: Bool
+    let detail: String?
+}
+
 struct PowerSnapshot: Equatable {
     var timestamp: Date
     var isCharging: Bool
@@ -106,6 +125,7 @@ struct PowerSnapshot: Equatable {
     var isLowPowerModeEnabled: Bool
     var thermalPressure: ThermalPressure?
     var appEnergyOffenders: [AppEnergyOffender]
+    var connectedDevices: [ConnectedPowerDevice]
     var diagnostics: PowerDiagnostics
 
     static let empty = PowerSnapshot(
@@ -149,6 +169,7 @@ struct PowerSnapshot: Equatable {
         isLowPowerModeEnabled: false,
         thermalPressure: nil,
         appEnergyOffenders: [],
+        connectedDevices: [],
         diagnostics: .empty
     )
 }
@@ -216,8 +237,7 @@ extension PowerSnapshot {
 
 extension PowerSnapshot {
     var hasSystemPowerData: Bool {
-        diagnostics.smc.hasDeliveryRate
-            || diagnostics.smc.hasSystemTotal
+        (diagnostics.smc.hasDeliveryRate || diagnostics.smc.hasSystemTotal)
             || (diagnostics.telemetry?.hasSystemPowerData ?? false)
     }
 
