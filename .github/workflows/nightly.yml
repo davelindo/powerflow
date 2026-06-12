@@ -28,7 +28,31 @@ jobs:
         if: ${{ env.POWERFLOW_VERIFY_LAYOUT_SNAPSHOTS == '1' }}
         run: ./scripts/verify_layout_snapshots.sh
 
+      - name: Detect signing credentials
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_BUILD_KEYCHAIN_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          if [[ -n "$CERTIFICATE_BASE64" \
+            && -n "$CERTIFICATE_PASSWORD" \
+            && -n "$KEYCHAIN_PASSWORD" \
+            && -n "$SIGN_IDENTITY" \
+            && -n "$APPLE_ID" \
+            && -n "$APPLE_TEAM_ID" \
+            && -n "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
+            echo "POWERFLOW_SIGNING_AVAILABLE=1" >> "$GITHUB_ENV"
+          else
+            echo "POWERFLOW_SIGNING_AVAILABLE=0" >> "$GITHUB_ENV"
+            echo "Signing credentials are incomplete; building unsigned nightly artifact."
+          fi
+
       - name: Import signing certificate
+        if: ${{ env.POWERFLOW_SIGNING_AVAILABLE == '1' }}
         env:
           CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
@@ -48,6 +72,7 @@ jobs:
           echo "SIGNING_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
       - name: Configure notarization
+        if: ${{ env.POWERFLOW_SIGNING_AVAILABLE == '1' }}
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -62,12 +87,17 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD"
 
-      - name: Build release
+      - name: Build signed release
+        if: ${{ env.POWERFLOW_SIGNING_AVAILABLE == '1' }}
         env:
           POWERFLOW_REQUIRE_SIGNING: "1"
           POWERFLOW_SIGN_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_SIGNING_IDENTITY }}
           POWERFLOW_NOTARY_KEYCHAIN_PROFILE: powerflow-notary
           POWERFLOW_NOTARY_KEYCHAIN: ${{ env.SIGNING_KEYCHAIN_PATH }}
+        run: ./scripts/build_release.sh
+
+      - name: Build unsigned nightly
+        if: ${{ env.POWERFLOW_SIGNING_AVAILABLE != '1' }}
         run: ./scripts/build_release.sh
 
       - name: Upload DMG artifact
