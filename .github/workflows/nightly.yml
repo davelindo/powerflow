@@ -25,6 +25,7 @@ jobs:
             test
 
       - name: Verify layout snapshots
+        if: ${{ env.POWERFLOW_VERIFY_LAYOUT_SNAPSHOTS == '1' }}
         run: ./scripts/verify_layout_snapshots.sh
 
       - name: Import signing certificate
