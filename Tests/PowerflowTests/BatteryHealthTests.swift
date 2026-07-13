@@ -2,6 +2,32 @@ import XCTest
 @testable import Powerflow
 
 final class BatteryHealthTests: XCTestCase {
+    func testBatteryCapacityDetailsPreferExplicitIORegistryMAhValues() throws {
+        var smc = SMCPowerData.empty
+        smc.hasCurrentCapacity = true
+        smc.currentCapacity = 12
+        smc.hasFullChargeCapacity = true
+        smc.fullChargeCapacity = 34
+        smc.hasDesignCapacity = true
+        smc.designCapacity = 56
+
+        var batteryInfo = BatteryInfo.empty
+        batteryInfo.remainingCapacityMAh = 3_770
+        batteryInfo.fullChargeCapacityMAh = 4_902
+        batteryInfo.designCapacity = 6_249
+
+        let details = try XCTUnwrap(
+            MacPowerDataProvider.resolvedBatteryCapacityDetails(
+                smc: smc,
+                batteryInfo: batteryInfo
+            )
+        )
+
+        XCTAssertEqual(details.remainingMAh, 3_770)
+        XCTAssertEqual(details.fullChargeMAh, 4_902)
+        XCTAssertEqual(details.designMAh, 6_249)
+    }
+
     func testResolvedBatteryHealthPrefersAppleSmartBatteryPercent() throws {
         var smc = SMCPowerData.empty
         smc.hasFullChargeCapacity = true

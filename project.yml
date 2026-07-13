@@ -17,10 +17,9 @@ targets:
     resources:
       - path: Resources
     frameworks:
-      - CoreBluetooth
       - IOKit
-      - IOBluetooth
       - ServiceManagement
+      - libsqlite3.tbd
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.powerflow.app

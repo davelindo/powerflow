@@ -50,6 +50,8 @@ struct BatteryInfo: Equatable {
     var maxCapacity: Int?
     var designCapacity: Int?
     var nominalChargeCapacity: Int?
+    var remainingCapacityMAh: Int?
+    var fullChargeCapacityMAh: Int?
     var maximumCapacityPercent: Int?
     var capacityUnits: BatteryCapacityUnits
     var batteryPercent: Int
@@ -71,6 +73,8 @@ struct BatteryInfo: Equatable {
         maxCapacity: nil,
         designCapacity: nil,
         nominalChargeCapacity: nil,
+        remainingCapacityMAh: nil,
+        fullChargeCapacityMAh: nil,
         maximumCapacityPercent: nil,
         capacityUnits: .percent,
         batteryPercent: 0,
@@ -93,12 +97,18 @@ final class IORegistryReader {
     func readBatteryInfo() -> BatteryInfo {
         guard let dict = readSmartBattery() else { return .empty }
 
+        let batteryData = dict["BatteryData"] as? NSDictionary
+
         let currentCapacity = intValue(dict, key: "CurrentCapacity") ?? 0
         let maxCapacity = intValue(dict, key: "MaxCapacity")
             ?? intValue(dict, key: "AppleRawMaxCapacity")
             ?? intValue(dict, key: "DesignCapacity")
-        let designCapacity = intValue(dict, key: "DesignCapacity")
-        let nominalChargeCapacity = intValue(dict, key: "NominalChargeCapacity")
+        let designCapacity = intValue(from: dict, key: "DesignCapacity", fallback: batteryData)
+        let nominalChargeCapacity = intValue(from: dict, key: "NominalChargeCapacity", fallback: batteryData)
+        let remainingCapacityMAh = intValue(from: dict, key: "AppleRawCurrentCapacity", fallback: batteryData)
+            ?? intValue(from: dict, key: "RemainingCapacity", fallback: batteryData)
+        let fullChargeCapacityMAh = intValue(from: dict, key: "FullChargeCapacity", fallback: batteryData)
+            ?? intValue(from: dict, key: "AppleRawMaxCapacity", fallback: batteryData)
         let maximumCapacityPercent = intValue(dict, key: "MaximumCapacityPercent")
         let isCharging = boolValue(dict, key: "IsCharging") ?? false
         let isExternalConnected = boolValue(dict, key: "ExternalConnected") ?? false
@@ -130,6 +140,8 @@ final class IORegistryReader {
             maxCapacity: maxCapacity,
             designCapacity: designCapacity,
             nominalChargeCapacity: nominalChargeCapacity,
+            remainingCapacityMAh: remainingCapacityMAh,
+            fullChargeCapacityMAh: fullChargeCapacityMAh,
             maximumCapacityPercent: maximumCapacityPercent,
             capacityUnits: capacityUnits,
             batteryPercent: batteryPercent,

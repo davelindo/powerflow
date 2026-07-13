@@ -2,6 +2,20 @@ import XCTest
 @testable import Powerflow
 
 final class PowerFormatterTests: XCTestCase {
+    func testWattsStringNormalizesNegativeZeroAndRejectsNonFiniteValues() {
+        XCTAssertEqual(PowerFormatter.wattsString(-0.001), "0W")
+        XCTAssertEqual(PowerFormatter.wattsString(.infinity), "--")
+    }
+
+    func testEnergyStringKeepsSmallTenMinuteTotalsReadable() {
+        XCTAssertEqual(PowerFormatter.energyString(0), "0mWh")
+        XCTAssertEqual(PowerFormatter.energyString(0.0004), "<1mWh")
+        XCTAssertEqual(PowerFormatter.energyString(0.008), "8.0mWh")
+        XCTAssertEqual(PowerFormatter.energyString(0.125), "125mWh")
+        XCTAssertEqual(PowerFormatter.energyString(1.25), "1.25Wh")
+        XCTAssertEqual(PowerFormatter.energyString(.infinity), "--")
+    }
+
     func testStatusTitleFallsBackToDefaultFormatWhenSettingsFormatIsBlank() {
         var settings = PowerSettings.default
         settings.statusBarFormat = "   "

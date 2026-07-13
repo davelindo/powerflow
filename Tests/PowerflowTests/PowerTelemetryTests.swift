@@ -2,6 +2,38 @@ import XCTest
 @testable import Powerflow
 
 final class PowerTelemetryTests: XCTestCase {
+    func testPowerValidationRejectsNonFiniteNegativeAndImplausibleValues() {
+        XCTAssertNil(MacPowerDataProvider.validatedPower(.infinity))
+        XCTAssertNil(MacPowerDataProvider.validatedPower(-1))
+        XCTAssertNil(MacPowerDataProvider.validatedPower(501))
+        XCTAssertEqual(MacPowerDataProvider.validatedPower(-12, allowsNegative: true), -12)
+    }
+
+    func testSMCSanitizationDropsImplausiblePowerAndFanReadings() {
+        var smc = SMCPowerData.empty
+        smc.systemTotal = 4.25e14
+        smc.hasSystemTotal = true
+        smc.batteryRate = 242_253
+        smc.hasBatteryRate = true
+        smc.fanReadings = [
+            SMCFanReading(
+                index: 0,
+                rpm: 1e12,
+                maxRpm: 1,
+                minRpm: nil,
+                targetRpm: nil,
+                modeRaw: nil,
+                percentMax: 100
+            ),
+        ]
+
+        let sanitized = MacPowerDataProvider.sanitizedSMC(smc)
+
+        XCTAssertFalse(sanitized.hasSystemTotal)
+        XCTAssertFalse(sanitized.hasBatteryRate)
+        XCTAssertTrue(sanitized.fanReadings.isEmpty)
+    }
+
     func testEmptyTelemetryCarriesNoSystemPowerData() {
         XCTAssertFalse(PowerTelemetry.empty.hasSystemPowerData)
         XCTAssertNil(PowerTelemetry.empty.systemPowerInWatts)

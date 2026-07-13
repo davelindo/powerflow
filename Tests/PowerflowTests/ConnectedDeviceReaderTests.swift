@@ -2,6 +2,11 @@ import XCTest
 @testable import Powerflow
 
 final class ConnectedDeviceReaderTests: XCTestCase {
+    func testNormalizesDeviceKeysWithoutBluetoothFrameworkAccess() {
+        XCTAssertEqual(ConnectedDeviceKey.normalizedName("Keychron B6 Pro"), "keychron-b6-pro")
+        XCTAssertEqual(ConnectedDeviceKey.normalizedAddress("AA:BB:CC:DD:EE:FF"), "aa-bb-cc-dd-ee-ff")
+    }
+
     func testParsesConnectedBluetoothDeviceBatteries() {
         let object: [String: Any] = [
             "SPBluetoothDataType": [

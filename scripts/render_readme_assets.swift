@@ -36,12 +36,12 @@ private let renders: [AssetRender] = [
         accentColor: NSColor(calibratedRed: 0.39, green: 0.63, blue: 0.96, alpha: 1.0)
     ),
     AssetRender(
-        inputName: "history-section-light.png",
+        inputName: "popover-reports-light.png",
         outputName: "graphs.png",
         wallpaperPath: wallpaperDirectory.appendingPathComponent("sonoma.png").path,
-        canvasSize: CGSize(width: 620, height: 596),
+        canvasSize: CGSize(width: 760, height: 720),
         popoverTopGap: 18,
-        popoverTrailingInset: 24,
+        popoverTrailingInset: 26,
         statusTitle: "35W | 82%",
         accentColor: NSColor(calibratedRed: 0.38, green: 0.74, blue: 0.57, alpha: 1.0)
     ),

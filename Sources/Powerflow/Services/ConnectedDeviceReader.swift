@@ -6,8 +6,6 @@ final class ConnectedDeviceReader {
 
     private let profilerPath: String
     private let timeout: TimeInterval
-    private let bluetoothBatteryReader: BluetoothBatteryReader
-    private let ioBluetoothBatteryReader: IOBluetoothBatteryReader
     private let refreshQueue = DispatchQueue(label: "Powerflow.connectedDeviceReader.refresh", qos: .utility)
     private let cacheLock = NSLock()
     private var cachedDevices: [ConnectedPowerDevice] = []
@@ -16,43 +14,24 @@ final class ConnectedDeviceReader {
 
     init(
         profilerPath: String = "/usr/sbin/system_profiler",
-        timeout: TimeInterval = 4,
-        bluetoothBatteryReader: BluetoothBatteryReader = BluetoothBatteryReader(),
-        ioBluetoothBatteryReader: IOBluetoothBatteryReader = IOBluetoothBatteryReader()
+        timeout: TimeInterval = 4
     ) {
         self.profilerPath = profilerPath
         self.timeout = timeout
-        self.bluetoothBatteryReader = bluetoothBatteryReader
-        self.ioBluetoothBatteryReader = ioBluetoothBatteryReader
     }
 
     func readDevices(detailLevel: PowerSnapshotDetailLevel, now: Date = Date()) -> [ConnectedPowerDevice] {
-        let batteryPercents = bluetoothBatteryReader.batteryPercents(now: now)
-        let batteryReadings = ioBluetoothBatteryReader.batteryReadings()
         let cached = cachedDeviceSnapshot()
         guard detailLevel == .full else {
-            return Self.devices(
-                cached.devices,
-                applyingBatteryPercentsByName: batteryPercents,
-                applyingBatteryReadingsByKey: batteryReadings
-            )
+            return cached.devices
         }
         if let cachedAt = cached.cachedAt,
            now.timeIntervalSince(cachedAt) < Self.refreshInterval {
-            return Self.devices(
-                cached.devices,
-                applyingBatteryPercentsByName: batteryPercents,
-                applyingBatteryReadingsByKey: batteryReadings
-            )
+            return cached.devices
         }
 
         refreshDeviceCacheIfNeeded(now: now)
-        let refreshed = cachedDeviceSnapshot()
-        return Self.devices(
-            refreshed.devices,
-            applyingBatteryPercentsByName: batteryPercents,
-            applyingBatteryReadingsByKey: batteryReadings
-        )
+        return cachedDeviceSnapshot().devices
     }
 
     private func cachedDeviceSnapshot() -> (devices: [ConnectedPowerDevice], cachedAt: Date?) {
@@ -129,7 +108,7 @@ final class ConnectedDeviceReader {
                 )
             }
 
-            guard let percent = batteryPercentsByName[BluetoothBatteryReader.normalizedNameKey(device.name)] else {
+            guard let percent = batteryPercentsByName[ConnectedDeviceKey.normalizedName(device.name)] else {
                 return device
             }
             return ConnectedPowerDevice(
@@ -159,11 +138,11 @@ final class ConnectedDeviceReader {
 
     private static func batteryMatchingKeys(for device: ConnectedPowerDevice) -> [String] {
         var keys = [
-            BluetoothBatteryReader.normalizedAddressKey(device.id),
-            BluetoothBatteryReader.normalizedNameKey(device.name),
+            ConnectedDeviceKey.normalizedAddress(device.id),
+            ConnectedDeviceKey.normalizedName(device.name),
         ]
         if let detail = device.detail {
-            keys.append(BluetoothBatteryReader.normalizedAddressKey(detail))
+            keys.append(ConnectedDeviceKey.normalizedAddress(detail))
         }
         return Array(Set(keys))
     }

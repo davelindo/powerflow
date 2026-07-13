@@ -11,15 +11,18 @@ Fork reference: https://github.com/lzt1008/powerflow
 
 <img src="assets/dashboard.png" alt="Powerflow dashboard" width="520">
 
-<img src="assets/graphs.png" alt="History and charts" width="260"> <img src="assets/settings.png" alt="Settings" width="260">
+<img src="assets/graphs.png" alt="Power and battery reports" width="520">
+
+<img src="assets/settings.png" alt="Settings" width="520">
 
 ## Features
 
 - Menu bar power readout with customizable format and icon.
-- Live power flow diagram (adapter, system, battery).
-- System load breakdown based on SMC total and known channels.
+- Live Sankey power flow for adapter, battery, system, package, display, and derived remainder load.
+- Persistent local power and battery reports with 1-hour through 90-day ranges.
+- Observed energy, adapter-time, temperature, capacity-health, and cycle-count trends.
 - Battery health, remaining Wh, cycle count, and temperature visibility.
-- History charts for system load and primary temperature.
+- Rolling ten-minute relative application-impact summary.
 - Battery guidance links to Apple's built-in battery management documentation.
 - Diagnostics view for SMC/IORegistry/telemetry data and fan readings.
 

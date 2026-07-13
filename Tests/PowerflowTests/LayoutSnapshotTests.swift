@@ -10,7 +10,7 @@ final class LayoutSnapshotTests: XCTestCase {
         let appState = LayoutSnapshotFixtures.makeAppState()
         try LayoutSnapshotHarness.assertSnapshot(
             named: "popover-dashboard-light",
-            size: LayoutSnapshotHarness.popoverSize,
+            size: LayoutSnapshotHarness.dashboardPopoverSize,
             view: StatusPopoverView(
                 appState: appState,
                 popoverStore: appState.popoverStore
@@ -25,7 +25,7 @@ final class LayoutSnapshotTests: XCTestCase {
         let appState = LayoutSnapshotFixtures.makeAppState()
         try LayoutSnapshotHarness.assertSnapshot(
             named: "popover-settings-light",
-            size: LayoutSnapshotHarness.popoverSize,
+            size: LayoutSnapshotHarness.settingsPopoverSize,
             view: StatusPopoverView(
                 appState: appState,
                 popoverStore: appState.popoverStore,
@@ -33,6 +33,115 @@ final class LayoutSnapshotTests: XCTestCase {
             )
             .environmentObject(appState)
             .snapshotEnvironment()
+        )
+    }
+
+    func testReportsPopoverLayout() throws {
+        try requireSnapshotMode()
+        let appState = LayoutSnapshotFixtures.makeAppState()
+        try LayoutSnapshotHarness.assertSnapshot(
+            named: "popover-reports-light",
+            size: LayoutSnapshotHarness.dashboardPopoverSize,
+            view: StatusPopoverView(
+                appState: appState,
+                popoverStore: appState.popoverStore,
+                initialSelectedTab: .reports
+            )
+            .environmentObject(appState)
+            .snapshotEnvironment()
+        )
+    }
+
+    func testBatteryReportPopoverLayout() throws {
+        try requireSnapshotMode()
+        let appState = LayoutSnapshotFixtures.makeAppState()
+        try LayoutSnapshotHarness.assertSnapshot(
+            named: "popover-battery-report-light",
+            size: LayoutSnapshotHarness.dashboardPopoverSize,
+            view: StatusPopoverView(
+                appState: appState,
+                popoverStore: appState.popoverStore,
+                initialSelectedTab: .reports,
+                initialReportMode: .battery
+            )
+            .environmentObject(appState)
+            .snapshotEnvironment()
+        )
+    }
+
+    func testDevicesPopoverLayout() throws {
+        try requireSnapshotMode()
+        let appState = LayoutSnapshotFixtures.makeAppState()
+        try LayoutSnapshotHarness.assertSnapshot(
+            named: "popover-devices-light",
+            size: LayoutSnapshotHarness.dashboardPopoverSize,
+            view: StatusPopoverView(
+                appState: appState,
+                popoverStore: appState.popoverStore,
+                initialSelectedTab: .devices
+            )
+            .environmentObject(appState)
+            .snapshotEnvironment()
+        )
+    }
+
+    func testDashboardPopoverDarkLayout() throws {
+        try requireSnapshotMode()
+        let appState = LayoutSnapshotFixtures.makeAppState()
+        try LayoutSnapshotHarness.assertSnapshot(
+            named: "popover-dashboard-dark",
+            size: LayoutSnapshotHarness.dashboardPopoverSize,
+            view: StatusPopoverView(appState: appState, popoverStore: appState.popoverStore)
+                .environmentObject(appState)
+                .snapshotEnvironment(colorScheme: .dark)
+        )
+    }
+
+    func testReportsPopoverDarkLayout() throws {
+        try requireSnapshotMode()
+        let appState = LayoutSnapshotFixtures.makeAppState()
+        try LayoutSnapshotHarness.assertSnapshot(
+            named: "popover-reports-dark",
+            size: LayoutSnapshotHarness.dashboardPopoverSize,
+            view: StatusPopoverView(
+                appState: appState,
+                popoverStore: appState.popoverStore,
+                initialSelectedTab: .reports
+            )
+            .environmentObject(appState)
+            .snapshotEnvironment(colorScheme: .dark)
+        )
+    }
+
+    func testDevicesPopoverDarkLayout() throws {
+        try requireSnapshotMode()
+        let appState = LayoutSnapshotFixtures.makeAppState()
+        try LayoutSnapshotHarness.assertSnapshot(
+            named: "popover-devices-dark",
+            size: LayoutSnapshotHarness.dashboardPopoverSize,
+            view: StatusPopoverView(
+                appState: appState,
+                popoverStore: appState.popoverStore,
+                initialSelectedTab: .devices
+            )
+            .environmentObject(appState)
+            .snapshotEnvironment(colorScheme: .dark)
+        )
+    }
+
+    func testSettingsPopoverDarkLayout() throws {
+        try requireSnapshotMode()
+        let appState = LayoutSnapshotFixtures.makeAppState()
+        try LayoutSnapshotHarness.assertSnapshot(
+            named: "popover-settings-dark",
+            size: LayoutSnapshotHarness.settingsPopoverSize,
+            view: StatusPopoverView(
+                appState: appState,
+                popoverStore: appState.popoverStore,
+                initialShowingSettings: true
+            )
+            .environmentObject(appState)
+            .snapshotEnvironment(colorScheme: .dark)
         )
     }
 
@@ -73,7 +182,8 @@ private enum LayoutSnapshotFixtures {
         return AppState.snapshotTesting(
             settings: settings,
             snapshot: snapshot,
-            history: history
+            history: history,
+            report: makeReport(snapshot: snapshot, history: history)
         )
     }
 
@@ -85,7 +195,7 @@ private enum LayoutSnapshotFixtures {
         snapshot.batteryLevel = 82
         snapshot.batteryLevelPrecise = 81.7
         snapshot.timeRemainingMinutes = 154
-        snapshot.systemIn = 61.8
+        snapshot.systemIn = 39.9
         snapshot.systemLoad = 34.6
         snapshot.batteryPower = 5.3
         snapshot.adapterPower = 67.1
@@ -116,6 +226,11 @@ private enum LayoutSnapshotFixtures {
         snapshot.batteryTemperatureC = 27.4
         snapshot.batteryHealthPercent = 89
         snapshot.batteryRemainingWh = 50.4
+        snapshot.batteryCapacityDetails = BatteryCapacityDetails(
+            remainingMAh: 4_570,
+            fullChargeMAh: 5_560,
+            designMAh: 6_249
+        )
         snapshot.batteryCurrentMA = 2550
         snapshot.batteryCellVoltages = [4.12, 4.13, 4.12]
         snapshot.batteryCycleCountSMC = 173
@@ -130,12 +245,16 @@ private enum LayoutSnapshotFixtures {
                 groupID: "com.apple.Safari",
                 primaryPID: 4102,
                 name: "Safari",
-                iconPath: "/System/Applications/Safari.app",
+                iconPath: "/Applications/Safari.app",
                 processCount: 7,
                 impactScore: 16.8,
                 cpuPercent: 14.0,
                 memoryBytes: 1_842_225_152,
-                pageinsPerSecond: 0.4
+                pageinsPerSecond: 0.4,
+                activityShare: 0.52,
+                estimatedPowerWatts: 8.0,
+                estimatedEnergyWh: 8.0 * 10 / 3_600,
+                sampleDurationSeconds: 10
             ),
             AppEnergyOffender(
                 groupID: "com.apple.dt.Xcode",
@@ -146,7 +265,11 @@ private enum LayoutSnapshotFixtures {
                 impactScore: 8.6,
                 cpuPercent: 6.3,
                 memoryBytes: 1_120_034_816,
-                pageinsPerSecond: 0.1
+                pageinsPerSecond: 0.1,
+                activityShare: 0.27,
+                estimatedPowerWatts: 4.2,
+                estimatedEnergyWh: 4.2 * 10 / 3_600,
+                sampleDurationSeconds: 10
             ),
             AppEnergyOffender(
                 groupID: "com.apple.ActivityMonitor",
@@ -157,7 +280,11 @@ private enum LayoutSnapshotFixtures {
                 impactScore: 4.1,
                 cpuPercent: 2.1,
                 memoryBytes: 458_227_712,
-                pageinsPerSecond: 0.0
+                pageinsPerSecond: 0.0,
+                activityShare: 0.13,
+                estimatedPowerWatts: 2.0,
+                estimatedEnergyWh: 2.0 * 10 / 3_600,
+                sampleDurationSeconds: 10
             ),
         ]
         snapshot.connectedDevices = [
@@ -199,7 +326,7 @@ private enum LayoutSnapshotFixtures {
         smc.hasTemperature = true
         smc.chargingStatus = 1
         smc.hasChargingStatus = true
-        smc.deliveryRate = 61.8
+        smc.deliveryRate = 39.9
         smc.hasDeliveryRate = true
         smc.fanReadings = [
             SMCFanReading(
@@ -221,7 +348,7 @@ private enum LayoutSnapshotFixtures {
         let base = Date(timeIntervalSinceReferenceDate: 781_488_000 - (11 * 15))
         let systemLoads: [Double] = [18, 22, 25, 21, 28, 31, 29, 33, 37, 35, 34, 34.6]
         let screenLoads: [Double] = [6.2, 6.5, 6.7, 6.8, 7.1, 7.5, 7.6, 7.8, 7.9, 7.8, 7.8, 7.8]
-        let inputLoads: [Double] = [42, 45, 47, 46, 52, 54, 55, 58, 61, 60, 61.4, 61.8]
+        let inputLoads: [Double] = [30, 32, 33, 31, 36, 38, 38, 40, 43, 42, 40.5, 39.9]
         let temperatures: [Double] = [31.8, 32.4, 33.1, 33.4, 34.0, 34.6, 35.1, 35.8, 36.2, 36.4, 36.7, 36.8]
         let fanPercents: [Double] = [14, 14, 15, 16, 18, 19, 20, 22, 23, 24, 25, 25.3]
 
@@ -236,6 +363,48 @@ private enum LayoutSnapshotFixtures {
             )
         }
     }
+
+    private static func makeReport(
+        snapshot: PowerSnapshot,
+        history: [PowerHistoryPoint]
+    ) -> PowerReportState {
+        let points = history.map { point in
+            PowerReportPoint(
+                timestamp: point.timestamp,
+                systemLoad: point.systemLoad,
+                adapterInput: point.inputPower,
+                batteryPower: snapshot.batteryPower,
+                screenPower: point.screenPower,
+                packagePower: snapshot.heatpipePower,
+                temperatureC: point.temperatureC,
+                fanPercent: point.fanPercentMax,
+                batteryHealthPercent: snapshot.batteryHealthPercent,
+                fullChargeMAh: snapshot.batteryCapacityDetails?.fullChargeMAh ?? 5_560,
+                designMAh: snapshot.batteryCapacityDetails?.designMAh ?? 6_249,
+                cycleCount: snapshot.batteryDetails?.cycleCount
+            )
+        }
+        return PowerReportState(
+            range: .day,
+            points: points,
+            summary: PowerReportSummary(
+                averageSystemLoad: points.map(\.systemLoad).reduce(0, +) / Double(points.count),
+                peakSystemLoad: points.map(\.systemLoad).max() ?? 0,
+                observedEnergyWh: 126.4,
+                externalPowerFraction: 0.86,
+                coverageFraction: 0.74,
+                averageTemperatureC: 34.8,
+                peakTemperatureC: points.compactMap(\.temperatureC).max(),
+                latestBatteryHealthPercent: snapshot.batteryHealthPercent,
+                latestFullChargeMAh: 5_560,
+                latestDesignMAh: 6_249,
+                latestCycleCount: 173,
+                cycleCountChange: 2
+            ),
+            isLoading: false,
+            errorMessage: nil
+        )
+    }
 }
 
 private enum LayoutSnapshotHarness {
@@ -248,7 +417,8 @@ private enum LayoutSnapshotHarness {
     )
     static let isRecording = mode == .record
     static let isVerificationEnabled = mode == .verify
-    static let popoverSize = CGSize(width: 402, height: 590)
+    static let dashboardPopoverSize = CGSize(width: 420, height: 460)
+    static let settingsPopoverSize = CGSize(width: 420, height: 460)
     static let featureAssetSize = CGSize(width: 370, height: 504)
     private static let meanDeltaTolerance = 0.003
     private static let changedPixelTolerance = 0.015
@@ -484,9 +654,9 @@ private enum LayoutSnapshotHarness {
 }
 
 private extension View {
-    func snapshotEnvironment() -> some View {
+    func snapshotEnvironment(colorScheme: ColorScheme = .light) -> some View {
         environment(\.powerflowSnapshotRendering, true)
-            .environment(\.colorScheme, .light)
+            .environment(\.colorScheme, colorScheme)
             .environment(\.locale, Locale(identifier: "en_US_POSIX"))
     }
 }

@@ -33,6 +33,9 @@ final class MacPowerDataProvider: PowerDataProvider {
     private var lastSavedCpuTempKeys: [String] = []
     private var cachedProfilerBatteryHealth: CachedBatteryHealth?
     private var isRefreshingProfilerBatteryHealth = false
+    private var lastComputePowerSample: (uptime: TimeInterval, watts: Double)?
+    private var pendingComputeEnergyWh = 0.0
+    private var pendingComputeDuration = 0.0
 
     init() {
         isAppleSilicon = SystemInfoReader.isAppleSilicon()
@@ -86,14 +89,19 @@ final class MacPowerDataProvider: PowerDataProvider {
         let now = Date()
         let smcHints = smcReadHints(for: settings, detailLevel: detailLevel)
         let batteryInfo = ioReader.readBatteryInfo()
-        let smc = smcReader.readPowerData(detailLevel: detailLevel, hints: smcHints)
+        let smc = Self.sanitizedSMC(
+            smcReader.readPowerData(detailLevel: detailLevel, hints: smcHints)
+        )
         updateCpuTempKeyCacheIfNeeded()
         updatePolarityKey(using: smc)
         let telemetry = batteryInfo.powerTelemetry
-        let efficiencyLoss = telemetry?.adapterEfficiencyLossWatts ?? 0
-        let telemetrySystemIn = telemetry?.systemPowerInWatts
-        let telemetrySystemLoad = telemetry?.systemLoadWatts
-        let telemetryBatteryPower = telemetry?.batteryPowerWatts
+        let efficiencyLoss = Self.validatedPower(telemetry?.adapterEfficiencyLossWatts) ?? 0
+        let telemetrySystemIn = Self.validatedPower(telemetry?.systemPowerInWatts)
+        let telemetrySystemLoad = Self.validatedPower(telemetry?.systemLoadWatts)
+        let telemetryBatteryPower = Self.validatedPower(
+            telemetry?.batteryPowerWatts,
+            allowsNegative: true
+        )
         let adapterInputVoltage = smc.hasAdapterInputVoltage ? smc.adapterInputVoltage : nil
         let adapterInputCurrent = smc.hasAdapterInputCurrent ? smc.adapterInputCurrent : nil
         let adapterInputPower = resolveAdapterInputPower(
@@ -124,7 +132,7 @@ final class MacPowerDataProvider: PowerDataProvider {
         let batteryLevelPrecise = resolveBatteryLevelPrecise(batteryInfo: batteryInfo, smc: smc)
         let batteryCurrentMA = resolveBatteryCurrentMA(smc: smc, batteryInfo: batteryInfo)
         let batteryVoltageMV = resolveBatteryVoltageMV(smc: smc, batteryInfo: batteryInfo)
-        let batteryPower = resolveBatteryPower(
+        let rawBatteryPower = resolveBatteryPower(
             adjustedBatteryRate: adjustedBatteryRate,
             telemetryBatteryPower: telemetryBatteryPower,
             batteryCurrentMA: batteryCurrentMA,
@@ -133,9 +141,14 @@ final class MacPowerDataProvider: PowerDataProvider {
             systemLoad: systemLoad,
             preferTelemetryBatteryPower: preferTelemetryBatteryPower
         )
-        let adapterPower = adapterInputPower ?? (systemIn + efficiencyLoss)
+        let batteryPower = Self.validatedPower(rawBatteryPower, allowsNegative: true) ?? 0
+        let adapterPower = Self.validatedPower(adapterInputPower ?? (systemIn + efficiencyLoss)) ?? 0
         let batteryHealthPercent = batteryHealthPercent(smc: smc, batteryInfo: batteryInfo, now: now)
         let batteryRemainingWh = batteryRemainingWh(from: smc, batteryInfo: batteryInfo)
+        let batteryCapacityDetails = Self.resolvedBatteryCapacityDetails(
+            smc: smc,
+            batteryInfo: batteryInfo
+        )
         let smcTime = batteryInfo.isCharging
             ? (smc.hasTimeToFull ? smc.timeToFull : 0)
             : (smc.hasTimeToEmpty ? smc.timeToEmpty : 0)
@@ -148,9 +161,38 @@ final class MacPowerDataProvider: PowerDataProvider {
         let batteryTemperatureC = smc.hasTemperature && smc.temperature > 0 ? smc.temperature : nil
         let batteryCellVoltages = resolveBatteryCellVoltages(smc: smc, batteryInfo: batteryInfo)
         let processInfo = ProcessInfo.processInfo
-        let appEnergyOffenders = settings.showAppEnergyOffenders
-            ? appEnergyMonitor.sample(detailLevel: detailLevel)
-            : []
+        let appEnergyOffenders: [AppEnergyOffender]
+        if settings.showAppEnergyOffenders {
+            let computePowerBudget = Self.computePowerBudget(
+                systemLoad: systemLoad,
+                screenPower: screenPowerAvailable ? screenPower : nil,
+                packagePower: smc.hasHeatpipe ? heatpipePower : nil
+            )
+            recordComputePower(watts: computePowerBudget, uptime: processInfo.systemUptime)
+            let activity = appEnergyMonitor.sample(
+                detailLevel: detailLevel,
+                at: now,
+                uptime: processInfo.systemUptime
+            )
+            if activity.isFresh, pendingComputeDuration > 0 {
+                appEnergyOffenders = Self.attributingEstimatedEnergy(
+                    to: activity.offenders,
+                    energyBudgetWh: pendingComputeEnergyWh,
+                    duration: pendingComputeDuration
+                )
+                pendingComputeEnergyWh = 0
+                pendingComputeDuration = 0
+            } else {
+                appEnergyOffenders = Self.attributingEstimatedPower(
+                    to: activity.offenders,
+                    computePowerBudget: computePowerBudget
+                )
+            }
+        } else {
+            appEnergyMonitor.reset()
+            resetComputeEnergyIntegration()
+            appEnergyOffenders = []
+        }
         let connectedDevices = connectedDeviceReader.readDevices(detailLevel: detailLevel, now: now)
 
         return PowerSnapshot(
@@ -184,6 +226,7 @@ final class MacPowerDataProvider: PowerDataProvider {
             batteryTemperatureC: batteryTemperatureC,
             batteryHealthPercent: batteryHealthPercent,
             batteryRemainingWh: batteryRemainingWh,
+            batteryCapacityDetails: batteryCapacityDetails,
             batteryCurrentMA: batteryCurrentMA,
             batteryCellVoltages: batteryCellVoltages,
             batteryCycleCountSMC: smc.batteryCycleCount,
@@ -197,6 +240,145 @@ final class MacPowerDataProvider: PowerDataProvider {
             connectedDevices: connectedDevices,
             diagnostics: PowerDiagnostics(smc: smc, telemetry: telemetry)
         )
+    }
+
+    static func attributingEstimatedPower(
+        to offenders: [AppEnergyOffender],
+        systemLoad: Double,
+        screenPower: Double?,
+        packagePower: Double?
+    ) -> [AppEnergyOffender] {
+        attributingEstimatedPower(
+            to: offenders,
+            computePowerBudget: computePowerBudget(
+                systemLoad: systemLoad,
+                screenPower: screenPower,
+                packagePower: packagePower
+            )
+        )
+    }
+
+    static func computePowerBudget(
+        systemLoad: Double,
+        screenPower: Double?,
+        packagePower: Double?
+    ) -> Double {
+        let validatedSystemLoad = validatedPower(systemLoad) ?? 0
+        let validatedScreenPower = validatedPower(screenPower) ?? 0
+        let fallbackComputePower = max(validatedSystemLoad - validatedScreenPower, 0)
+        let measuredPackagePower = validatedPower(packagePower)
+        return measuredPackagePower.map { packagePower in
+            validatedSystemLoad > 0 ? min(packagePower, validatedSystemLoad) : packagePower
+        } ?? fallbackComputePower
+    }
+
+    static func integratedEnergyWh(
+        previousWatts: Double,
+        currentWatts: Double,
+        duration: TimeInterval
+    ) -> Double? {
+        guard let previous = validatedPower(previousWatts),
+              let current = validatedPower(currentWatts),
+              duration.isFinite,
+              duration > 0,
+              duration <= PowerflowConstants.maxAppEnergyIntegrationInterval else {
+            return nil
+        }
+        return ((previous + current) * 0.5) * duration / 3_600
+    }
+
+    static func attributingEstimatedEnergy(
+        to offenders: [AppEnergyOffender],
+        energyBudgetWh: Double,
+        duration: TimeInterval
+    ) -> [AppEnergyOffender] {
+        guard energyBudgetWh.isFinite,
+              energyBudgetWh >= 0,
+              duration.isFinite,
+              duration > 0 else {
+            return offenders
+        }
+
+        return offenders.map { offender in
+            let share = offender.activityShare.map { min(max($0, 0), 1) }
+            let estimatedEnergy = share.map { energyBudgetWh * $0 }
+            let estimatedPower = estimatedEnergy.map { $0 * 3_600 / duration }
+            return copiedOffender(
+                offender,
+                activityShare: share,
+                estimatedPowerWatts: estimatedPower,
+                estimatedEnergyWh: estimatedEnergy,
+                sampleDurationSeconds: duration
+            )
+        }
+    }
+
+    private static func attributingEstimatedPower(
+        to offenders: [AppEnergyOffender],
+        computePowerBudget: Double
+    ) -> [AppEnergyOffender] {
+
+        return offenders.map { offender in
+            let share = offender.activityShare.map { min(max($0, 0), 1) }
+            let estimatedPower = share.map { computePowerBudget * $0 }
+            return copiedOffender(
+                offender,
+                activityShare: share,
+                estimatedPowerWatts: estimatedPower,
+                estimatedEnergyWh: nil,
+                sampleDurationSeconds: nil
+            )
+        }
+    }
+
+    private static func copiedOffender(
+        _ offender: AppEnergyOffender,
+        activityShare: Double?,
+        estimatedPowerWatts: Double?,
+        estimatedEnergyWh: Double?,
+        sampleDurationSeconds: TimeInterval?
+    ) -> AppEnergyOffender {
+        AppEnergyOffender(
+            groupID: offender.groupID,
+            primaryPID: offender.primaryPID,
+            name: offender.name,
+            iconPath: offender.iconPath,
+            processCount: offender.processCount,
+            impactScore: offender.impactScore,
+            cpuPercent: offender.cpuPercent,
+            memoryBytes: offender.memoryBytes,
+            pageinsPerSecond: offender.pageinsPerSecond,
+            activityShare: activityShare,
+            estimatedPowerWatts: estimatedPowerWatts,
+            estimatedEnergyWh: estimatedEnergyWh,
+            sampleDurationSeconds: sampleDurationSeconds
+        )
+    }
+
+    private func recordComputePower(watts: Double, uptime: TimeInterval) {
+        defer { lastComputePowerSample = (uptime: uptime, watts: watts) }
+        guard uptime.isFinite,
+              let previous = lastComputePowerSample else {
+            return
+        }
+        let duration = uptime - previous.uptime
+        guard let energy = Self.integratedEnergyWh(
+            previousWatts: previous.watts,
+            currentWatts: watts,
+            duration: duration
+        ) else {
+            pendingComputeEnergyWh = 0
+            pendingComputeDuration = 0
+            return
+        }
+        pendingComputeEnergyWh += energy
+        pendingComputeDuration += duration
+    }
+
+    private func resetComputeEnergyIntegration() {
+        lastComputePowerSample = nil
+        pendingComputeEnergyWh = 0
+        pendingComputeDuration = 0
     }
 
     private func batteryHealthPercent(smc: SMCPowerData, batteryInfo: BatteryInfo, now: Date) -> Double? {
@@ -280,6 +462,36 @@ final class MacPowerDataProvider: PowerDataProvider {
         return clampBatteryHealthPercent(raw)
     }
 
+    static func resolvedBatteryCapacityDetails(
+        smc: SMCPowerData,
+        batteryInfo: BatteryInfo
+    ) -> BatteryCapacityDetails? {
+        let remaining = plausibleCapacity(batteryInfo.remainingCapacityMAh)
+            ?? plausibleCapacity(smc.hasCurrentCapacity ? smc.currentCapacity : nil)
+        let fullCharge = plausibleCapacity(batteryInfo.fullChargeCapacityMAh)
+            ?? plausibleCapacity(batteryInfo.nominalChargeCapacity)
+            ?? plausibleCapacity(smc.hasFullChargeCapacity ? smc.fullChargeCapacity : nil)
+        let design = plausibleCapacity(batteryInfo.designCapacity)
+            ?? plausibleCapacity(smc.hasDesignCapacity ? smc.designCapacity : nil)
+
+        guard remaining != nil || fullCharge != nil || design != nil else { return nil }
+        return BatteryCapacityDetails(
+            remainingMAh: remaining.map(Double.init),
+            fullChargeMAh: fullCharge.map(Double.init),
+            designMAh: design.map(Double.init)
+        )
+    }
+
+    private static func plausibleCapacity(_ value: Int?) -> Int? {
+        guard let value, (100...20_000).contains(value) else { return nil }
+        return value
+    }
+
+    private static func plausibleCapacity(_ value: Double?) -> Int? {
+        guard let value, value.isFinite, (100...20_000).contains(value) else { return nil }
+        return Int(value.rounded())
+    }
+
     static func resolvedSystemPower(
         smc: SMCPowerData,
         telemetrySystemIn: Double?,
@@ -298,6 +510,81 @@ final class MacPowerDataProvider: PowerDataProvider {
             smc.hasDeliveryRate ? smc.deliveryRate : (adapterInputPower ?? 0),
             smc.hasSystemTotal ? smc.systemTotal : 0
         )
+    }
+
+    static func validatedPower(
+        _ value: Double?,
+        allowsNegative: Bool = false
+    ) -> Double? {
+        guard let value, value.isFinite else { return nil }
+        let limit = PowerflowConstants.maximumValidPowerWatts
+        if allowsNegative {
+            return abs(value) <= limit ? value : nil
+        }
+        return (0...limit).contains(value) ? value : nil
+    }
+
+    static func sanitizedSMC(_ raw: SMCPowerData) -> SMCPowerData {
+        var data = raw
+
+        if validatedPower(data.batteryRate, allowsNegative: true) == nil {
+            data.batteryRate = 0
+            data.hasBatteryRate = false
+        }
+        if validatedPower(data.deliveryRate) == nil {
+            data.deliveryRate = 0
+            data.hasDeliveryRate = false
+        }
+        if validatedPower(data.systemTotal) == nil {
+            data.systemTotal = 0
+            data.hasSystemTotal = false
+        }
+        if validatedPower(data.heatpipe) == nil {
+            data.heatpipe = 0
+            data.heatpipeKey = nil
+            data.hasHeatpipe = false
+        }
+        if validatedPower(data.brightness) == nil {
+            data.brightness = 0
+            data.hasBrightness = false
+        }
+
+        let voltageRange = 0...PowerflowConstants.maximumValidAdapterVoltage
+        if !data.adapterInputVoltage.isFinite || !voltageRange.contains(data.adapterInputVoltage) {
+            data.adapterInputVoltage = 0
+            data.hasAdapterInputVoltage = false
+        }
+        let currentRange = 0...PowerflowConstants.maximumValidAdapterCurrent
+        if !data.adapterInputCurrent.isFinite || !currentRange.contains(data.adapterInputCurrent) {
+            data.adapterInputCurrent = 0
+            data.hasAdapterInputCurrent = false
+        }
+
+        data.fanReadings = data.fanReadings.compactMap { reading in
+            guard reading.rpm.isFinite,
+                  reading.rpm > 0,
+                  reading.rpm <= PowerflowConstants.maximumValidFanRPM else {
+                return nil
+            }
+            var sanitized = reading
+            sanitized.maxRpm = validatedFanRPM(reading.maxRpm)
+            sanitized.minRpm = validatedFanRPM(reading.minRpm)
+            sanitized.targetRpm = validatedFanRPM(reading.targetRpm)
+            if let percent = reading.percentMax, percent.isFinite, (0...100).contains(percent) {
+                sanitized.percentMax = percent
+            } else {
+                sanitized.percentMax = nil
+            }
+            return sanitized
+        }
+
+        return data
+    }
+
+    private static func validatedFanRPM(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, value > 0,
+              value <= PowerflowConstants.maximumValidFanRPM else { return nil }
+        return value
     }
 
     private static func clampBatteryHealthPercent(_ value: Double) -> Double {

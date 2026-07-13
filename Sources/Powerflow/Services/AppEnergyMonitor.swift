@@ -1,6 +1,12 @@
 import Darwin
 import Foundation
 
+struct AppActivitySample {
+    let offenders: [AppEnergyOffender]
+    let isFresh: Bool
+    let interval: TimeInterval?
+}
+
 final class AppEnergyMonitor {
     private struct ProcessIdentity {
         let groupID: String
@@ -10,10 +16,9 @@ final class AppEnergyMonitor {
 
     private struct ProcessSample {
         let pid: Int32
-        let totalCPUTimeMicros: UInt64
+        let totalCPUTimeTicks: UInt64
         let residentBytes: UInt64
         let pageins: Int32
-        let threadCount: Int32
     }
 
     private struct RankedProcess {
@@ -64,16 +69,37 @@ final class AppEnergyMonitor {
 
     private var lastSamples: [Int32: ProcessSample] = [:]
     private var lastRefreshAt: Date?
+    private var lastSampleUptime: TimeInterval?
+    private var hasComputedDelta = false
     private var cachedOffenders: [AppEnergyOffender] = []
     private var identityCache: [Int32: ProcessIdentity] = [:]
+    private let nanosecondsPerCPUTick: Double
 
-    func sample(detailLevel: PowerSnapshotDetailLevel, at now: Date = Date()) -> [AppEnergyOffender] {
+    init() {
+        var timebase = mach_timebase_info_data_t()
+        if mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom > 0 {
+            nanosecondsPerCPUTick = Double(timebase.numer) / Double(timebase.denom)
+        } else {
+            nanosecondsPerCPUTick = 1
+        }
+    }
+
+    func sample(
+        detailLevel: PowerSnapshotDetailLevel,
+        at now: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> AppActivitySample {
         let refreshInterval = detailLevel == .full
             ? PowerflowConstants.appEnergyFullRefreshInterval
             : PowerflowConstants.appEnergySummaryRefreshInterval
+        let requiredInterval = hasComputedDelta
+            ? refreshInterval
+            : min(refreshInterval, PowerflowConstants.appEnergyBaselineRefreshInterval)
 
-        if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < refreshInterval {
-            return cachedOffenders
+        if let lastRefreshAt,
+           now.timeIntervalSince(lastRefreshAt)
+            < max(requiredInterval - PowerflowConstants.timerIntervalTolerance, 0) {
+            return AppActivitySample(offenders: cachedOffenders, isFresh: false, interval: nil)
         }
 
         let samples = currentProcessSamples()
@@ -83,24 +109,52 @@ final class AppEnergyMonitor {
         defer {
             lastSamples = sampleMap
             lastRefreshAt = now
+            lastSampleUptime = uptime
         }
 
-        guard let lastRefreshAt else { return cachedOffenders }
+        guard let lastSampleUptime, uptime > lastSampleUptime else {
+            return AppActivitySample(offenders: cachedOffenders, isFresh: false, interval: nil)
+        }
 
-        let elapsed = max(now.timeIntervalSince(lastRefreshAt), 0.5)
+        let elapsed = uptime - lastSampleUptime
         let ranked = rankedProcesses(from: samples, elapsed: elapsed)
         cachedOffenders = groupedOffenders(from: ranked)
-        return cachedOffenders
+        hasComputedDelta = true
+        return AppActivitySample(offenders: cachedOffenders, isFresh: true, interval: elapsed)
+    }
+
+    func reset() {
+        guard lastRefreshAt != nil || !lastSamples.isEmpty || !cachedOffenders.isEmpty else { return }
+        lastSamples.removeAll(keepingCapacity: true)
+        identityCache.removeAll(keepingCapacity: true)
+        cachedOffenders = []
+        lastRefreshAt = nil
+        lastSampleUptime = nil
+        hasComputedDelta = false
     }
 
     static func impactScore(
         cpuPercent: Double,
-        pageinsPerSecond: Double,
-        threadCount: Int32
+        pageinsPerSecond: Double
     ) -> Double {
         let pageinPenalty = min(pageinsPerSecond * 2.5, 12)
-        let threadPenalty = min(Double(max(threadCount - 8, 0)) * 0.08, 6)
-        return cpuPercent + pageinPenalty + threadPenalty
+        return cpuPercent + pageinPenalty
+    }
+
+    static func cpuPercent(
+        currentTicks: UInt64,
+        previousTicks: UInt64,
+        elapsed: TimeInterval,
+        nanosecondsPerTick: Double
+    ) -> Double? {
+        guard currentTicks >= previousTicks,
+              elapsed > 0,
+              elapsed.isFinite,
+              nanosecondsPerTick > 0,
+              nanosecondsPerTick.isFinite else { return nil }
+        let deltaNanoseconds = Double(currentTicks - previousTicks) * nanosecondsPerTick
+        let value = (deltaNanoseconds / (elapsed * 1_000_000_000)) * 100
+        return value.isFinite ? max(value, 0) : nil
     }
 
     private func rankedProcesses(
@@ -110,18 +164,20 @@ final class AppEnergyMonitor {
         samples.compactMap { current in
             guard current.pid != getpid(),
                   let previous = lastSamples[current.pid],
-                  current.totalCPUTimeMicros >= previous.totalCPUTimeMicros else {
+                  let cpuPercent = Self.cpuPercent(
+                    currentTicks: current.totalCPUTimeTicks,
+                    previousTicks: previous.totalCPUTimeTicks,
+                    elapsed: elapsed,
+                    nanosecondsPerTick: nanosecondsPerCPUTick
+                  ) else {
                 return nil
             }
 
-            let cpuDeltaMicros = current.totalCPUTimeMicros - previous.totalCPUTimeMicros
-            let cpuPercent = (Double(cpuDeltaMicros) / (elapsed * 1_000_000.0)) * 100.0
             let pageinsDelta = max(current.pageins - previous.pageins, 0)
             let pageinsPerSecond = Double(pageinsDelta) / elapsed
             let impactScore = Self.impactScore(
                 cpuPercent: cpuPercent,
-                pageinsPerSecond: pageinsPerSecond,
-                threadCount: current.threadCount
+                pageinsPerSecond: pageinsPerSecond
             )
 
             guard impactScore >= PowerflowConstants.minimumAppEnergyContributorImpact else { return nil }
@@ -167,10 +223,9 @@ final class AppEnergyMonitor {
 
         return ProcessSample(
             pid: pid,
-            totalCPUTimeMicros: taskInfo.pti_total_user + taskInfo.pti_total_system,
+            totalCPUTimeTicks: taskInfo.pti_total_user + taskInfo.pti_total_system,
             residentBytes: taskInfo.pti_resident_size,
-            pageins: taskInfo.pti_pageins,
-            threadCount: taskInfo.pti_threadnum
+            pageins: taskInfo.pti_pageins
         )
     }
 
@@ -187,6 +242,9 @@ final class AppEnergyMonitor {
                 groups[identity.groupID] = GroupedProcess(identity: identity, process: rankedProcess)
             }
         }
+
+        let totalImpact = groups.values.reduce(0) { $0 + max($1.impactScore, 0) }
+        guard totalImpact > 0 else { return [] }
 
         return groups.values
             .filter { $0.impactScore >= PowerflowConstants.minimumAppEnergyImpact }
@@ -207,7 +265,8 @@ final class AppEnergyMonitor {
                     impactScore: group.impactScore,
                     cpuPercent: group.cpuPercent,
                     memoryBytes: group.memoryBytes,
-                    pageinsPerSecond: group.pageinsPerSecond
+                    pageinsPerSecond: group.pageinsPerSecond,
+                    activityShare: group.impactScore / totalImpact
                 )
             }
     }

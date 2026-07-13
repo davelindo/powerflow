@@ -2,6 +2,7 @@ import Foundation
 
 final class PowerMonitor {
     private static let backgroundUpdateInterval = PowerflowConstants.backgroundUpdateInterval
+    private static let backgroundAppEnergyUpdateInterval = PowerflowConstants.backgroundAppEnergyUpdateInterval
     private static let warmupSampleTarget = PowerflowConstants.warmupSampleTarget
     private static let warmupMaxDuration = PowerflowConstants.warmupMaxDuration
 
@@ -138,7 +139,11 @@ final class PowerMonitor {
 
     private func refreshSchedule(force: Bool) {
         let isWarmup = warmupState != nil
-        let targetInterval = resolvedInterval(settings, isPopoverVisible: isPopoverVisible, isWarmup: isWarmup)
+        let targetInterval = Self.resolvedInterval(
+            settings,
+            isPopoverVisible: isPopoverVisible,
+            isWarmup: isWarmup
+        )
         let targetDetailLevel = resolvedDetailLevel(isPopoverVisible: isPopoverVisible, isWarmup: isWarmup)
         let intervalChanged = abs(targetInterval - interval) > 0.01
         let detailChanged = targetDetailLevel != detailLevel
@@ -170,7 +175,7 @@ final class PowerMonitor {
         refreshSchedule(force: true)
     }
 
-    private func resolvedInterval(
+    static func resolvedInterval(
         _ settings: PowerSettings,
         isPopoverVisible: Bool,
         isWarmup: Bool
@@ -178,6 +183,9 @@ final class PowerMonitor {
         let base = max(settings.updateIntervalSeconds, PowerSettings.minimumUpdateInterval)
         guard !isWarmup else { return base }
         guard !isPopoverVisible else { return base }
+        if settings.showAppEnergyOffenders {
+            return max(base, Self.backgroundAppEnergyUpdateInterval)
+        }
         return max(base, Self.backgroundUpdateInterval)
     }
 
