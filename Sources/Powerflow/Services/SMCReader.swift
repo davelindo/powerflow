@@ -161,6 +161,8 @@ final class SMCReader {
     private var preferredCapacityKey: String?
     private var cachedCpuTempKeys: [String] = []
     private var cachedSummaryFanReadings: [SMCFanReading]?
+    private var cachedFanCount: Int?
+    private var cachedFanDetails: [Int: FanStaticDetails] = [:]
     private var didScanCpuTempKeys = false
     private let cpuTempScanCooldown = PowerflowConstants.cpuTempScanCooldown
     private var lastCpuTempScanFailure: Date?
@@ -267,6 +269,13 @@ final class SMCReader {
         let readings = readFanReadings(connection, includeDetails: false)
         cachedSummaryFanReadings = readings
         return readings
+    }
+
+    private struct FanStaticDetails {
+        let maxRpm: Double?
+        let minRpm: Double?
+        let targetRpm: Double?
+        let modeRaw: Int?
     }
 
     private func readFullPowerData(_ connection: SMCConnection) -> SMCPowerData {
@@ -381,7 +390,7 @@ final class SMCReader {
             data.hasTemperature = true
         }
 
-        // Dynamically scan for battery cell voltages (supports 1-8 cells)
+        // Dynamically scan for battery cell voltages (supports 1-8 cells).
         for cellIndex in 1...8 {
             let key = "SBA\(cellIndex)"
             guard let value = connection.readKey(key)?.floatValue(), value > 0 else { continue }
@@ -430,56 +439,117 @@ final class SMCReader {
         _ connection: FanKeyReading,
         includeDetails: Bool
     ) -> [SMCFanReading] {
-        let countValue = connection.readKey("FNum")?.floatValue() ?? 0
-        let count = max(0, Int(countValue.rounded()))
-        let maxFans = min(count, 6)
-        let indices = maxFans > 0 ? Array(0..<maxFans) : [0, 1]
+        let count: Int
+        if let cachedFanCount {
+            count = cachedFanCount
+        } else if let cachedCount = cachedSummaryFanReadings?.count, cachedCount > 0 {
+            count = min(cachedCount, 6)
+            cachedFanCount = count
+        } else {
+            let countValue = connection.readKey("FNum")?.floatValue() ?? 0
+            count = min(max(0, Int(countValue.rounded())), 6)
+            cachedFanCount = count
+        }
+        let indices = count > 0 ? Array(0..<count) : [0, 1]
         var readings: [SMCFanReading] = []
 
         for index in indices {
             let key = "F\(index)Ac"
             guard let rpm = connection.readKey(key)?.floatValue(), rpm > 0 else { continue }
-            let maxKey = "F\(index)Mx"
-            let maxRpm = connection.readKey(maxKey)?.floatValue()
-            let minRpm: Double?
-            let targetRpm: Double?
-            let modeRaw: Int?
             if includeDetails {
-                let minKey = "F\(index)Mn"
-                minRpm = connection.readKey(minKey)?.floatValue()
-                let targetKey = "F\(index)Tg"
-                targetRpm = connection.readKey(targetKey)?.floatValue()
-                let modeKey = "F\(index)Md"
-                modeRaw = connection.readKey(modeKey)?.floatValue().map { Int($0.rounded()) }
+                let maxKey = "F\(index)Mx"
+                let details = fanDetails(
+                    for: index,
+                    connection: connection,
+                    maxRpm: connection.readKey(maxKey)?.floatValue()
+                )
+                readings.append(Self.fanReading(
+                    index: index,
+                    rpm: rpm,
+                    details: details,
+                    includeDetails: includeDetails
+                ))
             } else {
-                minRpm = nil
-                targetRpm = nil
-                modeRaw = nil
-            }
-            let percentMax: Double?
-            if let maxRpm, maxRpm > 0 {
-                if includeDetails, let minRpm, minRpm > 0, maxRpm > minRpm {
-                    percentMax = min(100, max(0, (rpm - minRpm) / (maxRpm - minRpm) * 100))
-                } else {
-                    percentMax = min(100, (rpm / maxRpm) * 100)
-                }
-            } else {
-                percentMax = nil
-            }
-            readings.append(
-                SMCFanReading(
+                let maxRpm = cachedFanDetails[index]?.maxRpm ?? connection.readKey("F\(index)Mx")?.floatValue()
+                readings.append(Self.fanReading(
                     index: index,
                     rpm: rpm,
                     maxRpm: maxRpm,
-                    minRpm: minRpm,
-                    targetRpm: targetRpm,
-                    modeRaw: modeRaw,
-                    percentMax: percentMax
-                )
-            )
+                    minRpm: nil,
+                    targetRpm: nil,
+                    modeRaw: nil,
+                    includeDetails: false
+                ))
+            }
         }
 
         return readings
+    }
+
+    private func fanDetails(
+        for index: Int,
+        connection: FanKeyReading,
+        maxRpm: Double?
+    ) -> FanStaticDetails {
+        if let details = cachedFanDetails[index] {
+            return details
+        }
+        let minRpm = connection.readKey("F\(index)Mn")?.floatValue()
+        let targetRpm = connection.readKey("F\(index)Tg")?.floatValue()
+        let modeRaw = connection.readKey("F\(index)Md")?.floatValue().map { Int($0.rounded()) }
+        let details = FanStaticDetails(
+            maxRpm: maxRpm,
+            minRpm: minRpm,
+            targetRpm: targetRpm,
+            modeRaw: modeRaw
+        )
+        cachedFanDetails[index] = details
+        return details
+    }
+
+    private static func fanReading(
+        index: Int,
+        rpm: Double,
+        details: FanStaticDetails,
+        includeDetails: Bool
+    ) -> SMCFanReading {
+        fanReading(
+            index: index,
+            rpm: rpm,
+            maxRpm: details.maxRpm,
+            minRpm: includeDetails ? details.minRpm : nil,
+            targetRpm: includeDetails ? details.targetRpm : nil,
+            modeRaw: includeDetails ? details.modeRaw : nil,
+            includeDetails: includeDetails
+        )
+    }
+
+    private static func fanReading(
+        index: Int,
+        rpm: Double,
+        maxRpm: Double?,
+        minRpm: Double?,
+        targetRpm: Double?,
+        modeRaw: Int?,
+        includeDetails: Bool
+    ) -> SMCFanReading {
+        var percentMax: Double?
+        if let maxRpm, maxRpm > 0 {
+            if includeDetails, let minRpm, minRpm > 0, maxRpm > minRpm {
+                percentMax = min(100, max(0, (rpm - minRpm) / (maxRpm - minRpm) * 100))
+            } else {
+                percentMax = min(100, (rpm / maxRpm) * 100)
+            }
+        }
+        return SMCFanReading(
+            index: index,
+            rpm: rpm,
+            maxRpm: maxRpm,
+            minRpm: minRpm,
+            targetRpm: targetRpm,
+            modeRaw: modeRaw,
+            percentMax: percentMax
+       )
     }
 
     private func readCPUTemperature(
