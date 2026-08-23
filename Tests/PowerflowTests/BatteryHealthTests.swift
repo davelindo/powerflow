@@ -73,7 +73,7 @@ final class BatteryHealthTests: XCTestCase {
         XCTAssertEqual(health, 84, accuracy: 0.0001)
     }
 
-    func testResolvedBatteryHealthFallsBackToAppleSmartBatteryNominalCapacity() throws {
+    func testResolvedBatteryHealthUsesFullChargeCapacityInsteadOfNominalCapacity() throws {
         var smc = SMCPowerData.empty
         smc.hasFullChargeCapacity = true
         smc.hasDesignCapacity = true
@@ -91,9 +91,7 @@ final class BatteryHealthTests: XCTestCase {
                 profilerMaximumCapacityPercent: nil
             )
         )
-        let nominalChargeCapacity = try XCTUnwrap(batteryInfo.nominalChargeCapacity)
-        let designCapacity = try XCTUnwrap(batteryInfo.designCapacity)
-        let expectedHealth = (Double(nominalChargeCapacity) / Double(designCapacity)) * 100.0
+        let expectedHealth = (smc.fullChargeCapacity / smc.designCapacity) * 100.0
 
         XCTAssertEqual(health, expectedHealth, accuracy: 0.0001)
     }

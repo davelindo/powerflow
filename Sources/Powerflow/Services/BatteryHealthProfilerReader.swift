@@ -10,31 +10,11 @@ final class BatteryHealthProfilerReader {
     }
 
     func readMaximumCapacityPercent() -> Double? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: profilerPath)
-        process.arguments = ["SPPowerDataType", "-json"]
-
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-
-        let semaphore = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in semaphore.signal() }
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()
-            process.waitUntilExit()
-            return nil
-        }
-
-        guard process.terminationStatus == 0 else { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
+        guard let data = BoundedProcessRunner.run(
+            executableURL: URL(fileURLWithPath: profilerPath),
+            arguments: ["SPPowerDataType", "-json"],
+            timeout: timeout
+        ) else { return nil }
         return Self.maximumCapacityPercent(from: data)
     }
 

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 
+@MainActor
 final class AppIconCache {
     static let shared = AppIconCache()
 

@@ -118,6 +118,7 @@ enum PowerFormatter {
     }
 }
 
+@MainActor
 enum BatteryIconRenderer {
     enum Overlay: String {
         case none

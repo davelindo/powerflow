@@ -83,7 +83,7 @@ final class PowerSettingsTests: XCTestCase {
         XCTAssertEqual(rows.first?.energyText, "8.0mWh")
         XCTAssertEqual(try XCTUnwrap(rows[1].energyWattHours), 0.003, accuracy: 0.000_001)
         XCTAssertEqual(rows[1].shareText, "15%")
-        XCTAssertTrue(rows[1].detailText.contains("Active 33%"))
+        XCTAssertTrue(rows[1].detailText.contains("Active 50%"))
     }
 
     func testProcessCPUTimeConvertsMachTicksToPercent() throws {

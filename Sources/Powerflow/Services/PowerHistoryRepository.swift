@@ -4,23 +4,288 @@ import SQLite3
 actor PowerHistoryRepository {
     enum RepositoryError: LocalizedError {
         case applicationSupportUnavailable
-        case sqlite(message: String)
+        case incompatibleSchema(Int32)
+        case sqlite(code: Int32, message: String)
 
         var errorDescription: String? {
             switch self {
             case .applicationSupportUnavailable:
                 return "Application Support is unavailable."
-            case let .sqlite(message):
+            case let .incompatibleSchema(version):
+                return "History database version \(version) is newer than this version of Powerflow."
+            case let .sqlite(_, message):
                 return "History database error: \(message)"
             }
         }
+
+        var isCorruption: Bool {
+            guard case let .sqlite(code, _) = self else { return false }
+            return code == SQLITE_CORRUPT || code == SQLITE_NOTADB
+        }
     }
 
+    private final class DatabaseHandle: @unchecked Sendable {
+        private(set) var pointer: OpaquePointer?
+
+        init(_ pointer: OpaquePointer) {
+            self.pointer = pointer
+        }
+
+        func close() {
+            guard let pointer else { return }
+            sqlite3_close(pointer)
+            self.pointer = nil
+        }
+
+        deinit {
+            close()
+        }
+    }
+
+    private struct TimedValue {
+        var value: Double?
+        var timestamp: TimeInterval?
+
+        mutating func update(_ newValue: Double?, at newTimestamp: TimeInterval) {
+            guard let newValue, newValue.isFinite else { return }
+            guard timestamp == nil || newTimestamp >= (timestamp ?? 0) else { return }
+            value = newValue
+            timestamp = newTimestamp
+        }
+    }
+
+    private struct TimedInteger {
+        var value: Int?
+        var timestamp: TimeInterval?
+
+        mutating func updateLatest(_ newValue: Int?, at newTimestamp: TimeInterval) {
+            guard let newValue else { return }
+            guard timestamp == nil || newTimestamp >= (timestamp ?? 0) else { return }
+            value = newValue
+            timestamp = newTimestamp
+        }
+
+        mutating func updateFirst(_ newValue: Int?, at newTimestamp: TimeInterval) {
+            guard let newValue else { return }
+            guard timestamp == nil || newTimestamp < (timestamp ?? .greatestFiniteMagnitude) else { return }
+            value = newValue
+            timestamp = newTimestamp
+        }
+    }
+
+    private struct MinuteAggregate {
+        var observedSeconds = 0.0
+        var systemEnergyWs = 0.0
+        var systemPeak = 0.0
+        var adapterEnergyWs = 0.0
+        var adapterPeak = 0.0
+        var batteryEnergyWs = 0.0
+        var screenEnergyWs = 0.0
+        var screenSeconds = 0.0
+        var packageEnergyWs = 0.0
+        var packageSeconds = 0.0
+        var temperatureValueSeconds = 0.0
+        var temperatureSeconds = 0.0
+        var temperaturePeak = 0.0
+        var fanValueSeconds = 0.0
+        var fanSeconds = 0.0
+        var fanPeak = 0.0
+        var externalSeconds = 0.0
+        var chargingSeconds = 0.0
+        var healthValueSeconds = 0.0
+        var healthSeconds = 0.0
+        var fullValueSeconds = 0.0
+        var fullSeconds = 0.0
+        var designValueSeconds = 0.0
+        var designSeconds = 0.0
+        var latestHealth = TimedValue()
+        var latestFull = TimedValue()
+        var latestDesign = TimedValue()
+        var firstCycle = TimedInteger()
+        var latestCycle = TimedInteger()
+
+        mutating func add(
+            previous: PowerHistoryObservation,
+            current: PowerHistoryObservation,
+            startFraction: Double,
+            endFraction: Double,
+            duration: TimeInterval,
+            systemEnergyWs suppliedSystemEnergy: Double?
+        ) {
+            guard duration.isFinite, duration > 0 else { return }
+            observedSeconds += duration
+
+            let systemStart = Self.interpolate(previous.systemLoad, current.systemLoad, startFraction)
+            let systemEnd = Self.interpolate(previous.systemLoad, current.systemLoad, endFraction)
+            systemEnergyWs += suppliedSystemEnergy ?? Self.integral(systemStart, systemEnd, duration)
+            systemPeak = max(systemPeak, max(systemStart, systemEnd))
+
+            let adapterStart = Self.interpolate(previous.adapterInput, current.adapterInput, startFraction)
+            let adapterEnd = Self.interpolate(previous.adapterInput, current.adapterInput, endFraction)
+            adapterEnergyWs += Self.integral(adapterStart, adapterEnd, duration)
+            adapterPeak = max(adapterPeak, max(adapterStart, adapterEnd))
+
+            let batteryStart = Self.interpolate(previous.batteryPower, current.batteryPower, startFraction)
+            let batteryEnd = Self.interpolate(previous.batteryPower, current.batteryPower, endFraction)
+            batteryEnergyWs += Self.integral(batteryStart, batteryEnd, duration)
+
+            Self.accumulateOptional(
+                previous.screenPower,
+                current.screenPower,
+                startFraction: startFraction,
+                endFraction: endFraction,
+                duration: duration,
+                valueSeconds: &screenEnergyWs,
+                observedSeconds: &screenSeconds
+            )
+            Self.accumulateOptional(
+                previous.packagePower,
+                current.packagePower,
+                startFraction: startFraction,
+                endFraction: endFraction,
+                duration: duration,
+                valueSeconds: &packageEnergyWs,
+                observedSeconds: &packageSeconds
+            )
+            Self.accumulateOptional(
+                previous.temperatureC,
+                current.temperatureC,
+                startFraction: startFraction,
+                endFraction: endFraction,
+                duration: duration,
+                valueSeconds: &temperatureValueSeconds,
+                observedSeconds: &temperatureSeconds,
+                peak: &temperaturePeak
+            )
+            Self.accumulateOptional(
+                previous.fanPercent,
+                current.fanPercent,
+                startFraction: startFraction,
+                endFraction: endFraction,
+                duration: duration,
+                valueSeconds: &fanValueSeconds,
+                observedSeconds: &fanSeconds,
+                peak: &fanPeak
+            )
+            Self.accumulateOptional(
+                previous.batteryHealthPercent,
+                current.batteryHealthPercent,
+                startFraction: startFraction,
+                endFraction: endFraction,
+                duration: duration,
+                valueSeconds: &healthValueSeconds,
+                observedSeconds: &healthSeconds
+            )
+            Self.accumulateOptional(
+                previous.fullChargeMAh,
+                current.fullChargeMAh,
+                startFraction: startFraction,
+                endFraction: endFraction,
+                duration: duration,
+                valueSeconds: &fullValueSeconds,
+                observedSeconds: &fullSeconds
+            )
+            Self.accumulateOptional(
+                previous.designMAh,
+                current.designMAh,
+                startFraction: startFraction,
+                endFraction: endFraction,
+                duration: duration,
+                valueSeconds: &designValueSeconds,
+                observedSeconds: &designSeconds
+            )
+
+            let externalStart = previous.isExternalPowerConnected ? 1.0 : 0.0
+            let externalEnd = current.isExternalPowerConnected ? 1.0 : 0.0
+            externalSeconds += Self.integral(
+                Self.interpolate(externalStart, externalEnd, startFraction),
+                Self.interpolate(externalStart, externalEnd, endFraction),
+                duration
+            )
+            let chargingStart = previous.isCharging ? 1.0 : 0.0
+            let chargingEnd = current.isCharging ? 1.0 : 0.0
+            chargingSeconds += Self.integral(
+                Self.interpolate(chargingStart, chargingEnd, startFraction),
+                Self.interpolate(chargingStart, chargingEnd, endFraction),
+                duration
+            )
+
+            let previousTimestamp = previous.timestamp.timeIntervalSince1970
+            let currentTimestamp = current.timestamp.timeIntervalSince1970
+            let segmentStartTimestamp = previousTimestamp
+                + ((currentTimestamp - previousTimestamp) * startFraction)
+            let segmentEndTimestamp = previousTimestamp
+                + ((currentTimestamp - previousTimestamp) * endFraction)
+            let segmentReachedCurrent = endFraction >= 1 - .ulpOfOne
+            latestHealth.update(
+                segmentReachedCurrent ? current.batteryHealthPercent : previous.batteryHealthPercent,
+                at: segmentEndTimestamp
+            )
+            latestFull.update(
+                segmentReachedCurrent ? current.fullChargeMAh : previous.fullChargeMAh,
+                at: segmentEndTimestamp
+            )
+            latestDesign.update(
+                segmentReachedCurrent ? current.designMAh : previous.designMAh,
+                at: segmentEndTimestamp
+            )
+            firstCycle.updateFirst(previous.cycleCount, at: segmentStartTimestamp)
+            let cycleAtSegmentEnd = segmentReachedCurrent
+                ? current.cycleCount
+                : previous.cycleCount
+            latestCycle.updateLatest(cycleAtSegmentEnd, at: segmentEndTimestamp)
+        }
+
+        private static func interpolate(_ start: Double, _ end: Double, _ fraction: Double) -> Double {
+            start + ((end - start) * min(max(fraction, 0), 1))
+        }
+
+        private static func integral(_ start: Double, _ end: Double, _ duration: Double) -> Double {
+            ((start + end) * 0.5) * duration
+        }
+
+        private static func accumulateOptional(
+            _ previous: Double?,
+            _ current: Double?,
+            startFraction: Double,
+            endFraction: Double,
+            duration: Double,
+            valueSeconds: inout Double,
+            observedSeconds: inout Double
+        ) {
+            guard let previous, let current, previous.isFinite, current.isFinite else { return }
+            let start = interpolate(previous, current, startFraction)
+            let end = interpolate(previous, current, endFraction)
+            valueSeconds += integral(start, end, duration)
+            observedSeconds += duration
+        }
+
+        private static func accumulateOptional(
+            _ previous: Double?,
+            _ current: Double?,
+            startFraction: Double,
+            endFraction: Double,
+            duration: Double,
+            valueSeconds: inout Double,
+            observedSeconds: inout Double,
+            peak: inout Double
+        ) {
+            guard let previous, let current, previous.isFinite, current.isFinite else { return }
+            let start = interpolate(previous, current, startFraction)
+            let end = interpolate(previous, current, endFraction)
+            valueSeconds += integral(start, end, duration)
+            observedSeconds += duration
+            peak = max(peak, max(start, end))
+        }
+    }
+
+    private static let schemaVersion: Int32 = 2
     private static let retention: TimeInterval = 90 * 24 * 60 * 60
-    private static let appImpactRetention: TimeInterval = 10 * 60
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    private var database: OpaquePointer?
+    private let handle: DatabaseHandle
+    private var pendingMinutes: [Int64: MinuteAggregate] = [:]
+    private var lastObservation: PowerHistoryObservation?
     private var lastPrunedMinute: Int64?
 
     init(databaseURL: URL? = nil) throws {
@@ -29,72 +294,42 @@ actor PowerHistoryRepository {
             at: resolvedURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-
-        do {
-            database = try Self.openDatabase(at: resolvedURL)
-        } catch {
-            let corruptURL = resolvedURL
-                .deletingPathExtension()
-                .appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970)).sqlite3")
-            try? FileManager.default.moveItem(at: resolvedURL, to: corruptURL)
-            database = try Self.openDatabase(at: resolvedURL)
-        }
+        self.handle = try Self.openOrResetDatabase(at: resolvedURL)
     }
 
-    deinit {
-        if let database {
-            sqlite3_close(database)
-        }
+    func record(observation: PowerHistoryObservation) throws {
+        defer { lastObservation = observation }
+        guard let previous = lastObservation else { return }
+        integrate(previous: previous, current: observation)
+        let currentMinute = Self.minute(containing: observation.timestamp)
+        try flushPending { $0 < currentMinute }
     }
 
-    func record(observation: PowerHistoryObservation, appImpact: AppImpactSample?) throws {
-        guard let database else { return }
-        try performTransaction(in: database) {
-            try upsert(observation, in: database)
-            if let appImpact {
-                try insert(appImpact, in: database)
-            }
-            try pruneIfNeeded(now: observation.timestamp, in: database)
-        }
+    func flush() throws {
+        try flushPending { _ in true }
     }
 
-    func record(appImpact: AppImpactSample) throws {
-        guard let database else { return }
-        try performTransaction(in: database) {
-            try insert(appImpact, in: database)
-            try pruneIfNeeded(now: appImpact.timestamp, in: database)
-        }
-    }
-
-    private func performTransaction(
-        in database: OpaquePointer,
-        updates: () throws -> Void
-    ) throws {
-        try Self.execute("BEGIN IMMEDIATE TRANSACTION", in: database)
-        do {
-            try updates()
-            try Self.execute("COMMIT", in: database)
-        } catch {
-            try? Self.execute("ROLLBACK", in: database)
-            throw error
-        }
+    func close() throws {
+        try flush()
+        handle.close()
     }
 
     func report(range: PowerReportRange, endingAt endDate: Date = Date()) throws -> PowerReportState {
-        guard let database else { return .empty(range: range) }
-        let end = Int64(endDate.timeIntervalSince1970)
-        let start = Int64(endDate.addingTimeInterval(-range.duration).timeIntervalSince1970)
+        try flush()
+        guard let database = handle.pointer else { return .empty(range: range) }
+
+        let endMinuteExclusive = Self.minute(containing: endDate) + 60
+        let startMinute = endMinuteExclusive - Int64(range.duration)
         let points = try reportPoints(
-            start: start,
-            end: end,
+            start: startMinute,
+            endExclusive: endMinuteExclusive,
             bucketSeconds: range.chartBucketSeconds,
             in: database
         )
         let summary = try reportSummary(
-            start: start,
-            end: end,
-            expectedMinutes: max(Int(range.duration / 60), 1),
-            points: points,
+            start: startMinute,
+            endExclusive: endMinuteExclusive,
+            expectedSeconds: range.duration,
             in: database
         )
         return PowerReportState(
@@ -106,187 +341,247 @@ actor PowerHistoryRepository {
         )
     }
 
-    func recentAppImpactSamples(endingAt endDate: Date = Date()) throws -> [AppImpactSample] {
-        guard let database else { return [] }
-        let sql = """
-        SELECT timestamp, payload
-        FROM app_impact_samples
-        WHERE timestamp >= ? AND timestamp <= ?
-        ORDER BY timestamp ASC
-        """
-        let statement = try Self.prepare(sql, in: database)
-        defer { sqlite3_finalize(statement) }
-        sqlite3_bind_double(statement, 1, endDate.addingTimeInterval(-Self.appImpactRetention).timeIntervalSince1970)
-        sqlite3_bind_double(statement, 2, endDate.timeIntervalSince1970)
-
-        let decoder = JSONDecoder()
-        var samples: [AppImpactSample] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            let timestamp = Date(timeIntervalSince1970: sqlite3_column_double(statement, 0))
-            guard let bytes = sqlite3_column_blob(statement, 1) else { continue }
-            let count = Int(sqlite3_column_bytes(statement, 1))
-            let data = Data(bytes: bytes, count: count)
-            guard let offenders = try? decoder.decode([AppEnergyOffender].self, from: data) else { continue }
-            samples.append(AppImpactSample(timestamp: timestamp, offenders: offenders))
-        }
-        try Self.checkCompletion(of: statement, in: database)
-        return samples
-    }
-
-    func clearAppImpact() throws {
-        guard let database else { return }
-        try Self.execute("DELETE FROM app_impact_samples", in: database)
-    }
-
     func storedMinuteCount() throws -> Int {
-        guard let database else { return 0 }
+        try flush()
+        guard let database = handle.pointer else { return 0 }
         let statement = try Self.prepare("SELECT COUNT(*) FROM minute_history", in: database)
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
         return Int(sqlite3_column_int64(statement, 0))
     }
 
-    private func upsert(_ observation: PowerHistoryObservation, in database: OpaquePointer) throws {
+    private func integrate(previous: PowerHistoryObservation, current: PowerHistoryObservation) {
+        let wallDuration = current.timestamp.timeIntervalSince(previous.timestamp)
+        let monotonicDuration: TimeInterval
+        if previous.monotonicUptime > 0, current.monotonicUptime > 0 {
+            monotonicDuration = current.monotonicUptime - previous.monotonicUptime
+        } else {
+            // Deterministic fixtures may omit uptime; production snapshots always provide it.
+            monotonicDuration = wallDuration
+        }
+
+        guard monotonicDuration.isFinite,
+              wallDuration.isFinite,
+              monotonicDuration > 0,
+              monotonicDuration <= PowerflowConstants.maxAppEnergyIntegrationInterval,
+              wallDuration > 0,
+              abs(wallDuration - monotonicDuration) <= max(2, monotonicDuration * 0.2) else {
+            return
+        }
+
+        let totalSystemEnergyWs = current.systemEnergyDeltaWh.flatMap { energy -> Double? in
+            let wattSeconds = energy * 3_600
+            return wattSeconds.isFinite && wattSeconds >= 0 ? wattSeconds : nil
+        }
+        let startEpoch = previous.timestamp.timeIntervalSince1970
+        let endEpoch = current.timestamp.timeIntervalSince1970
+        var cursor = startEpoch
+
+        while cursor < endEpoch {
+            let minute = Int64(floor(cursor / 60)) * 60
+            let segmentEnd = min(endEpoch, TimeInterval(minute + 60))
+            let startFraction = (cursor - startEpoch) / wallDuration
+            let endFraction = (segmentEnd - startEpoch) / wallDuration
+            let duration = monotonicDuration * ((segmentEnd - cursor) / wallDuration)
+            let suppliedEnergy = totalSystemEnergyWs.map { $0 * (duration / monotonicDuration) }
+            var aggregate = pendingMinutes[minute] ?? MinuteAggregate()
+            aggregate.add(
+                previous: previous,
+                current: current,
+                startFraction: startFraction,
+                endFraction: endFraction,
+                duration: duration,
+                systemEnergyWs: suppliedEnergy
+            )
+            pendingMinutes[minute] = aggregate
+            cursor = segmentEnd
+        }
+    }
+
+    private func flushPending(where shouldFlush: (Int64) -> Bool) throws {
+        let minutes = pendingMinutes.keys.filter(shouldFlush).sorted()
+        guard !minutes.isEmpty, let database = handle.pointer else { return }
+
+        try Self.execute("BEGIN IMMEDIATE TRANSACTION", in: database)
+        do {
+            for minute in minutes {
+                guard let aggregate = pendingMinutes[minute], aggregate.observedSeconds > 0 else { continue }
+                try Self.upsert(aggregate, minute: minute, in: database)
+            }
+            try pruneIfNeeded(nowMinute: minutes.last ?? 0, in: database)
+            try Self.execute("COMMIT", in: database)
+        } catch {
+            try? Self.execute("ROLLBACK", in: database)
+            throw error
+        }
+        for minute in minutes {
+            pendingMinutes.removeValue(forKey: minute)
+        }
+    }
+
+    private func pruneIfNeeded(nowMinute: Int64, in database: OpaquePointer) throws {
+        guard lastPrunedMinute != nowMinute else { return }
+        lastPrunedMinute = nowMinute
+        let cutoff = nowMinute - Int64(Self.retention)
+        let statement = try Self.prepare("DELETE FROM minute_history WHERE minute < ?", in: database)
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, cutoff)
+        try Self.stepDone(statement, in: database)
+    }
+
+    private static func upsert(_ value: MinuteAggregate, minute: Int64, in database: OpaquePointer) throws {
         let sql = """
         INSERT INTO minute_history (
-            minute, sample_count,
-            system_sum, system_peak,
-            adapter_sum, adapter_peak,
-            battery_sum,
-            screen_sum, screen_count,
-            package_sum, package_count,
-            temperature_sum, temperature_count, temperature_peak,
-            fan_sum, fan_count, fan_peak,
-            external_count, charging_count,
-            health_sum, health_count,
-            remaining_sum, remaining_count,
-            full_sum, full_count,
-            design_sum, design_count,
-            cycle_min, cycle_max
+            minute, observed_seconds,
+            system_energy_ws, system_peak,
+            adapter_energy_ws, adapter_peak,
+            battery_energy_ws,
+            screen_energy_ws, screen_seconds,
+            package_energy_ws, package_seconds,
+            temperature_value_seconds, temperature_seconds, temperature_peak,
+            fan_value_seconds, fan_seconds, fan_peak,
+            external_seconds, charging_seconds,
+            health_value_seconds, health_seconds,
+            full_value_seconds, full_seconds,
+            design_value_seconds, design_seconds,
+            latest_health, latest_health_at,
+            latest_full, latest_full_at,
+            latest_design, latest_design_at,
+            first_cycle, first_cycle_at,
+            latest_cycle, latest_cycle_at
         ) VALUES (
-            ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         ON CONFLICT(minute) DO UPDATE SET
-            sample_count = sample_count + 1,
-            system_sum = system_sum + excluded.system_sum,
+            observed_seconds = observed_seconds + excluded.observed_seconds,
+            system_energy_ws = system_energy_ws + excluded.system_energy_ws,
             system_peak = MAX(system_peak, excluded.system_peak),
-            adapter_sum = adapter_sum + excluded.adapter_sum,
+            adapter_energy_ws = adapter_energy_ws + excluded.adapter_energy_ws,
             adapter_peak = MAX(adapter_peak, excluded.adapter_peak),
-            battery_sum = battery_sum + excluded.battery_sum,
-            screen_sum = screen_sum + excluded.screen_sum,
-            screen_count = screen_count + excluded.screen_count,
-            package_sum = package_sum + excluded.package_sum,
-            package_count = package_count + excluded.package_count,
-            temperature_sum = temperature_sum + excluded.temperature_sum,
-            temperature_count = temperature_count + excluded.temperature_count,
+            battery_energy_ws = battery_energy_ws + excluded.battery_energy_ws,
+            screen_energy_ws = screen_energy_ws + excluded.screen_energy_ws,
+            screen_seconds = screen_seconds + excluded.screen_seconds,
+            package_energy_ws = package_energy_ws + excluded.package_energy_ws,
+            package_seconds = package_seconds + excluded.package_seconds,
+            temperature_value_seconds = temperature_value_seconds + excluded.temperature_value_seconds,
+            temperature_seconds = temperature_seconds + excluded.temperature_seconds,
             temperature_peak = MAX(temperature_peak, excluded.temperature_peak),
-            fan_sum = fan_sum + excluded.fan_sum,
-            fan_count = fan_count + excluded.fan_count,
+            fan_value_seconds = fan_value_seconds + excluded.fan_value_seconds,
+            fan_seconds = fan_seconds + excluded.fan_seconds,
             fan_peak = MAX(fan_peak, excluded.fan_peak),
-            external_count = external_count + excluded.external_count,
-            charging_count = charging_count + excluded.charging_count,
-            health_sum = health_sum + excluded.health_sum,
-            health_count = health_count + excluded.health_count,
-            remaining_sum = remaining_sum + excluded.remaining_sum,
-            remaining_count = remaining_count + excluded.remaining_count,
-            full_sum = full_sum + excluded.full_sum,
-            full_count = full_count + excluded.full_count,
-            design_sum = design_sum + excluded.design_sum,
-            design_count = design_count + excluded.design_count,
-            cycle_min = CASE
-                WHEN excluded.cycle_min IS NULL THEN cycle_min
-                WHEN cycle_min IS NULL THEN excluded.cycle_min
-                ELSE MIN(cycle_min, excluded.cycle_min)
-            END,
-            cycle_max = CASE
-                WHEN excluded.cycle_max IS NULL THEN cycle_max
-                WHEN cycle_max IS NULL THEN excluded.cycle_max
-                ELSE MAX(cycle_max, excluded.cycle_max)
-            END
+            external_seconds = external_seconds + excluded.external_seconds,
+            charging_seconds = charging_seconds + excluded.charging_seconds,
+            health_value_seconds = health_value_seconds + excluded.health_value_seconds,
+            health_seconds = health_seconds + excluded.health_seconds,
+            full_value_seconds = full_value_seconds + excluded.full_value_seconds,
+            full_seconds = full_seconds + excluded.full_seconds,
+            design_value_seconds = design_value_seconds + excluded.design_value_seconds,
+            design_seconds = design_seconds + excluded.design_seconds,
+            latest_health = CASE WHEN excluded.latest_health_at IS NOT NULL
+                AND (latest_health_at IS NULL OR excluded.latest_health_at >= latest_health_at)
+                THEN excluded.latest_health ELSE latest_health END,
+            latest_health_at = CASE WHEN latest_health_at IS NULL THEN excluded.latest_health_at
+                WHEN excluded.latest_health_at IS NULL THEN latest_health_at
+                ELSE MAX(latest_health_at, excluded.latest_health_at) END,
+            latest_full = CASE WHEN excluded.latest_full_at IS NOT NULL
+                AND (latest_full_at IS NULL OR excluded.latest_full_at >= latest_full_at)
+                THEN excluded.latest_full ELSE latest_full END,
+            latest_full_at = CASE WHEN latest_full_at IS NULL THEN excluded.latest_full_at
+                WHEN excluded.latest_full_at IS NULL THEN latest_full_at
+                ELSE MAX(latest_full_at, excluded.latest_full_at) END,
+            latest_design = CASE WHEN excluded.latest_design_at IS NOT NULL
+                AND (latest_design_at IS NULL OR excluded.latest_design_at >= latest_design_at)
+                THEN excluded.latest_design ELSE latest_design END,
+            latest_design_at = CASE WHEN latest_design_at IS NULL THEN excluded.latest_design_at
+                WHEN excluded.latest_design_at IS NULL THEN latest_design_at
+                ELSE MAX(latest_design_at, excluded.latest_design_at) END,
+            first_cycle = CASE WHEN excluded.first_cycle_at IS NOT NULL
+                AND (first_cycle_at IS NULL OR excluded.first_cycle_at < first_cycle_at)
+                THEN excluded.first_cycle ELSE first_cycle END,
+            first_cycle_at = CASE WHEN first_cycle_at IS NULL THEN excluded.first_cycle_at
+                WHEN excluded.first_cycle_at IS NULL THEN first_cycle_at
+                ELSE MIN(first_cycle_at, excluded.first_cycle_at) END,
+            latest_cycle = CASE WHEN excluded.latest_cycle_at IS NOT NULL
+                AND (latest_cycle_at IS NULL OR excluded.latest_cycle_at >= latest_cycle_at)
+                THEN excluded.latest_cycle ELSE latest_cycle END,
+            latest_cycle_at = CASE WHEN latest_cycle_at IS NULL THEN excluded.latest_cycle_at
+                WHEN excluded.latest_cycle_at IS NULL THEN latest_cycle_at
+                ELSE MAX(latest_cycle_at, excluded.latest_cycle_at) END
         """
-        let statement = try Self.prepare(sql, in: database)
+        let statement = try prepare(sql, in: database)
         defer { sqlite3_finalize(statement) }
-
-        let minute = Int64(observation.timestamp.timeIntervalSince1970 / 60) * 60
         var index: Int32 = 1
-        Self.bind(minute, to: statement, at: &index)
-        Self.bind(observation.systemLoad, to: statement, at: &index)
-        Self.bind(observation.systemLoad, to: statement, at: &index)
-        Self.bind(observation.adapterInput, to: statement, at: &index)
-        Self.bind(observation.adapterInput, to: statement, at: &index)
-        Self.bind(observation.batteryPower, to: statement, at: &index)
-        Self.bindOptional(observation.screenPower, to: statement, at: &index)
-        Self.bind(observation.screenPower == nil ? 0 : 1, to: statement, at: &index)
-        Self.bindOptional(observation.packagePower, to: statement, at: &index)
-        Self.bind(observation.packagePower == nil ? 0 : 1, to: statement, at: &index)
-        Self.bindOptional(observation.temperatureC, to: statement, at: &index)
-        Self.bind(observation.temperatureC == nil ? 0 : 1, to: statement, at: &index)
-        Self.bindOptional(observation.temperatureC, to: statement, at: &index)
-        Self.bindOptional(observation.fanPercent, to: statement, at: &index)
-        Self.bind(observation.fanPercent == nil ? 0 : 1, to: statement, at: &index)
-        Self.bindOptional(observation.fanPercent, to: statement, at: &index)
-        Self.bind(observation.isExternalPowerConnected ? 1 : 0, to: statement, at: &index)
-        Self.bind(observation.isCharging ? 1 : 0, to: statement, at: &index)
-        Self.bindOptional(observation.batteryHealthPercent, to: statement, at: &index)
-        Self.bind(observation.batteryHealthPercent == nil ? 0 : 1, to: statement, at: &index)
-        Self.bindOptional(observation.remainingMAh, to: statement, at: &index)
-        Self.bind(observation.remainingMAh == nil ? 0 : 1, to: statement, at: &index)
-        Self.bindOptional(observation.fullChargeMAh, to: statement, at: &index)
-        Self.bind(observation.fullChargeMAh == nil ? 0 : 1, to: statement, at: &index)
-        Self.bindOptional(observation.designMAh, to: statement, at: &index)
-        Self.bind(observation.designMAh == nil ? 0 : 1, to: statement, at: &index)
-        Self.bindOptional(observation.cycleCount, to: statement, at: &index)
-        Self.bindOptional(observation.cycleCount, to: statement, at: &index)
-
-        try Self.stepDone(statement, in: database)
-    }
-
-    private func insert(_ sample: AppImpactSample, in database: OpaquePointer) throws {
-        let payload = try JSONEncoder().encode(sample.offenders)
-        let sql = "INSERT OR REPLACE INTO app_impact_samples (timestamp, payload) VALUES (?, ?)"
-        let statement = try Self.prepare(sql, in: database)
-        defer { sqlite3_finalize(statement) }
-        sqlite3_bind_double(statement, 1, sample.timestamp.timeIntervalSince1970)
-        _ = payload.withUnsafeBytes { bytes in
-            sqlite3_bind_blob(statement, 2, bytes.baseAddress, Int32(bytes.count), Self.transient)
-        }
-        try Self.stepDone(statement, in: database)
-    }
-
-    private func pruneIfNeeded(now: Date, in database: OpaquePointer) throws {
-        let minute = Int64(now.timeIntervalSince1970 / 60) * 60
-        guard lastPrunedMinute != minute else { return }
-        lastPrunedMinute = minute
-
-        let historyCutoff = Int64(now.addingTimeInterval(-Self.retention).timeIntervalSince1970)
-        let appCutoff = now.addingTimeInterval(-Self.appImpactRetention).timeIntervalSince1970
-        try Self.execute("DELETE FROM minute_history WHERE minute < \(historyCutoff)", in: database)
-        try Self.execute("DELETE FROM app_impact_samples WHERE timestamp < \(appCutoff)", in: database)
+        bind(minute, to: statement, at: &index)
+        bind(value.observedSeconds, to: statement, at: &index)
+        bind(value.systemEnergyWs, to: statement, at: &index)
+        bind(value.systemPeak, to: statement, at: &index)
+        bind(value.adapterEnergyWs, to: statement, at: &index)
+        bind(value.adapterPeak, to: statement, at: &index)
+        bind(value.batteryEnergyWs, to: statement, at: &index)
+        bind(value.screenEnergyWs, to: statement, at: &index)
+        bind(value.screenSeconds, to: statement, at: &index)
+        bind(value.packageEnergyWs, to: statement, at: &index)
+        bind(value.packageSeconds, to: statement, at: &index)
+        bind(value.temperatureValueSeconds, to: statement, at: &index)
+        bind(value.temperatureSeconds, to: statement, at: &index)
+        bind(value.temperaturePeak, to: statement, at: &index)
+        bind(value.fanValueSeconds, to: statement, at: &index)
+        bind(value.fanSeconds, to: statement, at: &index)
+        bind(value.fanPeak, to: statement, at: &index)
+        bind(value.externalSeconds, to: statement, at: &index)
+        bind(value.chargingSeconds, to: statement, at: &index)
+        bind(value.healthValueSeconds, to: statement, at: &index)
+        bind(value.healthSeconds, to: statement, at: &index)
+        bind(value.fullValueSeconds, to: statement, at: &index)
+        bind(value.fullSeconds, to: statement, at: &index)
+        bind(value.designValueSeconds, to: statement, at: &index)
+        bind(value.designSeconds, to: statement, at: &index)
+        bindOptional(value.latestHealth.value, to: statement, at: &index)
+        bindOptional(value.latestHealth.timestamp, to: statement, at: &index)
+        bindOptional(value.latestFull.value, to: statement, at: &index)
+        bindOptional(value.latestFull.timestamp, to: statement, at: &index)
+        bindOptional(value.latestDesign.value, to: statement, at: &index)
+        bindOptional(value.latestDesign.timestamp, to: statement, at: &index)
+        bindOptional(value.firstCycle.value, to: statement, at: &index)
+        bindOptional(value.firstCycle.timestamp, to: statement, at: &index)
+        bindOptional(value.latestCycle.value, to: statement, at: &index)
+        bindOptional(value.latestCycle.timestamp, to: statement, at: &index)
+        try stepDone(statement, in: database)
     }
 
     private func reportPoints(
         start: Int64,
-        end: Int64,
+        endExclusive: Int64,
         bucketSeconds: Int64,
         in database: OpaquePointer
     ) throws -> [PowerReportPoint] {
         let sql = """
+        WITH ranged AS (
+            SELECT *, (minute / ?) * ? AS bucket
+            FROM minute_history
+            WHERE minute >= ? AND minute < ? AND observed_seconds > 0
+        ), aggregated AS (
+            SELECT
+                bucket,
+                SUM(system_energy_ws) / NULLIF(SUM(observed_seconds), 0),
+                SUM(adapter_energy_ws) / NULLIF(SUM(observed_seconds), 0),
+                SUM(battery_energy_ws) / NULLIF(SUM(observed_seconds), 0),
+                SUM(screen_energy_ws) / NULLIF(SUM(screen_seconds), 0),
+                SUM(package_energy_ws) / NULLIF(SUM(package_seconds), 0),
+                SUM(temperature_value_seconds) / NULLIF(SUM(temperature_seconds), 0),
+                SUM(fan_value_seconds) / NULLIF(SUM(fan_seconds), 0),
+                SUM(health_value_seconds) / NULLIF(SUM(health_seconds), 0),
+                SUM(full_value_seconds) / NULLIF(SUM(full_seconds), 0),
+                SUM(design_value_seconds) / NULLIF(SUM(design_seconds), 0)
+            FROM ranged
+            GROUP BY bucket
+        )
         SELECT
-            (minute / ?) * ? AS bucket,
-            SUM(system_sum) / NULLIF(SUM(sample_count), 0),
-            SUM(adapter_sum) / NULLIF(SUM(sample_count), 0),
-            SUM(battery_sum) / NULLIF(SUM(sample_count), 0),
-            SUM(screen_sum) / NULLIF(SUM(screen_count), 0),
-            SUM(package_sum) / NULLIF(SUM(package_count), 0),
-            SUM(temperature_sum) / NULLIF(SUM(temperature_count), 0),
-            SUM(fan_sum) / NULLIF(SUM(fan_count), 0),
-            SUM(health_sum) / NULLIF(SUM(health_count), 0),
-            SUM(full_sum) / NULLIF(SUM(full_count), 0),
-            SUM(design_sum) / NULLIF(SUM(design_count), 0),
-            MAX(cycle_max)
-        FROM minute_history
-        WHERE minute >= ? AND minute <= ?
-        GROUP BY bucket
+            aggregated.*,
+            (SELECT latest_cycle FROM ranged
+             WHERE ranged.bucket = aggregated.bucket AND latest_cycle IS NOT NULL
+             ORDER BY latest_cycle_at DESC LIMIT 1)
+        FROM aggregated
         ORDER BY bucket ASC
         """
         let statement = try Self.prepare(sql, in: database)
@@ -294,10 +589,11 @@ actor PowerHistoryRepository {
         sqlite3_bind_int64(statement, 1, bucketSeconds)
         sqlite3_bind_int64(statement, 2, bucketSeconds)
         sqlite3_bind_int64(statement, 3, start)
-        sqlite3_bind_int64(statement, 4, end)
+        sqlite3_bind_int64(statement, 4, endExclusive)
 
         var points: [PowerReportPoint] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW {
             points.append(
                 PowerReportPoint(
                     timestamp: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 0))),
@@ -314,62 +610,137 @@ actor PowerHistoryRepository {
                     cycleCount: Self.optionalInt(statement, column: 11)
                 )
             )
+            result = sqlite3_step(statement)
         }
-        try Self.checkCompletion(of: statement, in: database)
+        guard result == SQLITE_DONE else { throw Self.databaseError(database) }
         return points
     }
 
     private func reportSummary(
         start: Int64,
-        end: Int64,
-        expectedMinutes: Int,
-        points: [PowerReportPoint],
+        endExclusive: Int64,
+        expectedSeconds: TimeInterval,
         in database: OpaquePointer
     ) throws -> PowerReportSummary {
         let sql = """
         SELECT
-            COUNT(*),
-            SUM(system_sum) / NULLIF(SUM(sample_count), 0),
+            SUM(observed_seconds),
+            SUM(system_energy_ws) / NULLIF(SUM(observed_seconds), 0),
             MAX(system_peak),
-            SUM(system_sum / NULLIF(sample_count, 0)) / 60.0,
-            SUM(external_count) * 1.0 / NULLIF(SUM(sample_count), 0),
-            SUM(temperature_sum) / NULLIF(SUM(temperature_count), 0),
-            MAX(CASE WHEN temperature_count > 0 THEN temperature_peak END),
-            MIN(cycle_min),
-            MAX(cycle_max)
+            SUM(system_energy_ws) / 3600.0,
+            SUM(external_seconds) / NULLIF(SUM(observed_seconds), 0),
+            SUM(temperature_value_seconds) / NULLIF(SUM(temperature_seconds), 0),
+            MAX(CASE WHEN temperature_seconds > 0 THEN temperature_peak END)
         FROM minute_history
-        WHERE minute >= ? AND minute <= ?
+        WHERE minute >= ? AND minute < ? AND observed_seconds > 0
         """
         let statement = try Self.prepare(sql, in: database)
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, start)
-        sqlite3_bind_int64(statement, 2, end)
-        guard sqlite3_step(statement) == SQLITE_ROW else {
-            try Self.checkCompletion(of: statement, in: database)
-            return .empty
-        }
+        sqlite3_bind_int64(statement, 2, endExclusive)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return .empty }
 
-        let observedMinutes = Int(sqlite3_column_int64(statement, 0))
-        let firstCycle = Self.optionalInt(statement, column: 7)
-        let lastCycle = Self.optionalInt(statement, column: 8)
-        let latestHealth = points.reversed().compactMap(\.batteryHealthPercent).first
-        let latestFull = points.reversed().compactMap(\.fullChargeMAh).first
-        let latestDesign = points.reversed().compactMap(\.designMAh).first
-
+        let observedSeconds = sqlite3_column_double(statement, 0)
+        let latest = try latestBatteryValues(start: start, endExclusive: endExclusive, in: database)
+        let cycles = try cycleSummary(start: start, endExclusive: endExclusive, in: database)
         return PowerReportSummary(
             averageSystemLoad: sqlite3_column_double(statement, 1),
             peakSystemLoad: sqlite3_column_double(statement, 2),
             observedEnergyWh: sqlite3_column_double(statement, 3),
             externalPowerFraction: sqlite3_column_double(statement, 4),
-            coverageFraction: min(Double(observedMinutes) / Double(expectedMinutes), 1),
+            coverageFraction: min(max(observedSeconds / expectedSeconds, 0), 1),
             averageTemperatureC: Self.optionalDouble(statement, column: 5),
             peakTemperatureC: Self.optionalDouble(statement, column: 6),
-            latestBatteryHealthPercent: latestHealth,
-            latestFullChargeMAh: latestFull,
-            latestDesignMAh: latestDesign,
-            latestCycleCount: lastCycle,
-            cycleCountChange: firstCycle.flatMap { first in lastCycle.map { $0 - first } }
+            latestBatteryHealthPercent: latest.health,
+            latestFullChargeMAh: latest.full,
+            latestDesignMAh: latest.design,
+            latestCycleCount: cycles.latest,
+            cycleCountChange: cycles.resetDetected ? nil : cycles.first.flatMap { first in
+                cycles.latest.map { $0 - first }
+            },
+            cycleCountResetDetected: cycles.resetDetected
         )
+    }
+
+    private func latestBatteryValues(
+        start: Int64,
+        endExclusive: Int64,
+        in database: OpaquePointer
+    ) throws -> (health: Double?, full: Double?, design: Double?) {
+        let sql = """
+        SELECT latest_health, latest_health_at, latest_full, latest_full_at,
+               latest_design, latest_design_at
+        FROM minute_history
+        WHERE minute >= ? AND minute < ?
+        ORDER BY minute DESC
+        """
+        let statement = try Self.prepare(sql, in: database)
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, start)
+        sqlite3_bind_int64(statement, 2, endExclusive)
+        var health: (Double, Double)?
+        var full: (Double, Double)?
+        var design: (Double, Double)?
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW, health == nil || full == nil || design == nil {
+            if let value = Self.optionalDouble(statement, column: 0),
+               let timestamp = Self.optionalDouble(statement, column: 1),
+               health == nil || timestamp > (health?.1 ?? 0) {
+                health = (value, timestamp)
+            }
+            if let value = Self.optionalDouble(statement, column: 2),
+               let timestamp = Self.optionalDouble(statement, column: 3),
+               full == nil || timestamp > (full?.1 ?? 0) {
+                full = (value, timestamp)
+            }
+            if let value = Self.optionalDouble(statement, column: 4),
+               let timestamp = Self.optionalDouble(statement, column: 5),
+               design == nil || timestamp > (design?.1 ?? 0) {
+                design = (value, timestamp)
+            }
+            result = sqlite3_step(statement)
+        }
+        guard result == SQLITE_DONE || result == SQLITE_ROW else { throw Self.databaseError(database) }
+        return (health?.0, full?.0, design?.0)
+    }
+
+    private func cycleSummary(
+        start: Int64,
+        endExclusive: Int64,
+        in database: OpaquePointer
+    ) throws -> (first: Int?, latest: Int?, resetDetected: Bool) {
+        let sql = """
+        SELECT first_cycle, latest_cycle
+        FROM minute_history
+        WHERE minute >= ? AND minute < ?
+          AND first_cycle IS NOT NULL AND latest_cycle IS NOT NULL
+        ORDER BY COALESCE(first_cycle_at, latest_cycle_at) ASC
+        """
+        let statement = try Self.prepare(sql, in: database)
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, start)
+        sqlite3_bind_int64(statement, 2, endExclusive)
+        var first: Int?
+        var previous: Int?
+        var latest: Int?
+        var resetDetected = false
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW {
+            let firstInMinute = Int(sqlite3_column_int64(statement, 0))
+            let latestInMinute = Int(sqlite3_column_int64(statement, 1))
+            first = first ?? firstInMinute
+            if let previous, firstInMinute < previous {
+                resetDetected = true
+            }
+            if latestInMinute < firstInMinute {
+                resetDetected = true
+            }
+            previous = latestInMinute
+            latest = latestInMinute
+            result = sqlite3_step(statement)
+        }
+        guard result == SQLITE_DONE else { throw Self.databaseError(database) }
+        return (first, latest, resetDetected)
     }
 
     private static func defaultDatabaseURL() throws -> URL {
@@ -381,71 +752,148 @@ actor PowerHistoryRepository {
             .appendingPathComponent("history.sqlite3")
     }
 
-    private static func openDatabase(at url: URL) throws -> OpaquePointer {
+    private static func openOrResetDatabase(at url: URL) throws -> DatabaseHandle {
+        do {
+            return try openConfiguredDatabase(at: url)
+        } catch let error as RepositoryError where error.isCorruption {
+            try removeDatabaseFiles(at: url)
+            return try createFreshDatabase(at: url)
+        }
+    }
+
+    private static func openConfiguredDatabase(at url: URL) throws -> DatabaseHandle {
+        let handle = try openRawDatabase(at: url)
+        guard let database = handle.pointer else { throw databaseError(nil) }
+        do {
+            try execute("PRAGMA busy_timeout=1500", in: database)
+            let version = try userVersion(in: database)
+            let hasLegacyTable = version == 0
+                ? try tableExists("minute_history", in: database)
+                : false
+            if version == 1 || hasLegacyTable {
+                handle.close()
+                try removeDatabaseFiles(at: url)
+                return try createFreshDatabase(at: url)
+            }
+            guard version <= schemaVersion else {
+                throw RepositoryError.incompatibleSchema(version)
+            }
+            try configureAndCreateSchema(in: database)
+            return handle
+        } catch {
+            handle.close()
+            throw error
+        }
+    }
+
+    private static func createFreshDatabase(at url: URL) throws -> DatabaseHandle {
+        let handle = try openRawDatabase(at: url)
+        guard let database = handle.pointer else { throw databaseError(nil) }
+        do {
+            try configureAndCreateSchema(in: database)
+            return handle
+        } catch {
+            handle.close()
+            throw error
+        }
+    }
+
+    private static func configureAndCreateSchema(in database: OpaquePointer) throws {
+        try execute("PRAGMA journal_mode=WAL", in: database)
+        try execute("PRAGMA synchronous=NORMAL", in: database)
+        try execute("PRAGMA busy_timeout=1500", in: database)
+        try execute(schema, in: database)
+        try execute("PRAGMA user_version=\(schemaVersion)", in: database)
+    }
+
+    private static func openRawDatabase(at url: URL) throws -> DatabaseHandle {
         var database: OpaquePointer?
-        guard sqlite3_open_v2(
+        let result = sqlite3_open_v2(
             url.path,
             &database,
             SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
             nil
-        ) == SQLITE_OK,
-        let database else {
-            let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "Unable to open database"
+        )
+        guard result == SQLITE_OK, let database else {
+            let error = databaseError(database, fallbackCode: result)
             if let database { sqlite3_close(database) }
-            throw RepositoryError.sqlite(message: message)
-        }
-
-        do {
-            try execute("PRAGMA journal_mode=WAL", in: database)
-            try execute("PRAGMA synchronous=NORMAL", in: database)
-            try execute("PRAGMA busy_timeout=1500", in: database)
-            try execute(schema, in: database)
-            try execute("PRAGMA user_version=1", in: database)
-            return database
-        } catch {
-            sqlite3_close(database)
             throw error
         }
+        return DatabaseHandle(database)
+    }
+
+    private static func removeDatabaseFiles(at url: URL) throws {
+        let fileManager = FileManager.default
+        for path in [url.path, url.path + "-wal", url.path + "-shm"] where fileManager.fileExists(atPath: path) {
+            try fileManager.removeItem(atPath: path)
+        }
+    }
+
+    private static func tableExists(_ name: String, in database: OpaquePointer) throws -> Bool {
+        let statement = try prepare(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            in: database
+        )
+        defer { sqlite3_finalize(statement) }
+        _ = name.withCString { pointer in
+            sqlite3_bind_text(statement, 1, pointer, -1, transient)
+        }
+        let result = sqlite3_step(statement)
+        if result == SQLITE_ROW { return true }
+        if result == SQLITE_DONE { return false }
+        throw databaseError(database)
+    }
+
+    private static func userVersion(in database: OpaquePointer) throws -> Int32 {
+        let statement = try prepare("PRAGMA user_version", in: database)
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw databaseError(database) }
+        return sqlite3_column_int(statement, 0)
     }
 
     private static let schema = """
     CREATE TABLE IF NOT EXISTS minute_history (
         minute INTEGER PRIMARY KEY,
-        sample_count INTEGER NOT NULL,
-        system_sum REAL NOT NULL,
+        observed_seconds REAL NOT NULL,
+        system_energy_ws REAL NOT NULL,
         system_peak REAL NOT NULL,
-        adapter_sum REAL NOT NULL,
+        adapter_energy_ws REAL NOT NULL,
         adapter_peak REAL NOT NULL,
-        battery_sum REAL NOT NULL,
-        screen_sum REAL NOT NULL,
-        screen_count INTEGER NOT NULL,
-        package_sum REAL NOT NULL,
-        package_count INTEGER NOT NULL,
-        temperature_sum REAL NOT NULL,
-        temperature_count INTEGER NOT NULL,
+        battery_energy_ws REAL NOT NULL,
+        screen_energy_ws REAL NOT NULL,
+        screen_seconds REAL NOT NULL,
+        package_energy_ws REAL NOT NULL,
+        package_seconds REAL NOT NULL,
+        temperature_value_seconds REAL NOT NULL,
+        temperature_seconds REAL NOT NULL,
         temperature_peak REAL NOT NULL,
-        fan_sum REAL NOT NULL,
-        fan_count INTEGER NOT NULL,
+        fan_value_seconds REAL NOT NULL,
+        fan_seconds REAL NOT NULL,
         fan_peak REAL NOT NULL,
-        external_count INTEGER NOT NULL,
-        charging_count INTEGER NOT NULL,
-        health_sum REAL NOT NULL,
-        health_count INTEGER NOT NULL,
-        remaining_sum REAL NOT NULL,
-        remaining_count INTEGER NOT NULL,
-        full_sum REAL NOT NULL,
-        full_count INTEGER NOT NULL,
-        design_sum REAL NOT NULL,
-        design_count INTEGER NOT NULL,
-        cycle_min INTEGER,
-        cycle_max INTEGER
+        external_seconds REAL NOT NULL,
+        charging_seconds REAL NOT NULL,
+        health_value_seconds REAL NOT NULL,
+        health_seconds REAL NOT NULL,
+        full_value_seconds REAL NOT NULL,
+        full_seconds REAL NOT NULL,
+        design_value_seconds REAL NOT NULL,
+        design_seconds REAL NOT NULL,
+        latest_health REAL,
+        latest_health_at REAL,
+        latest_full REAL,
+        latest_full_at REAL,
+        latest_design REAL,
+        latest_design_at REAL,
+        first_cycle INTEGER,
+        first_cycle_at REAL,
+        latest_cycle INTEGER,
+        latest_cycle_at REAL
     );
-    CREATE TABLE IF NOT EXISTS app_impact_samples (
-        timestamp REAL PRIMARY KEY,
-        payload BLOB NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS app_impact_timestamp ON app_impact_samples(timestamp);
     """
+
+    private static func minute(containing date: Date) -> Int64 {
+        Int64(floor(date.timeIntervalSince1970 / 60)) * 60
+    }
 
     private static func execute(_ sql: String, in database: OpaquePointer) throws {
         var errorMessage: UnsafeMutablePointer<CChar>?
@@ -453,7 +901,7 @@ actor PowerHistoryRepository {
             let message = errorMessage.map { String(cString: $0) }
                 ?? String(cString: sqlite3_errmsg(database))
             sqlite3_free(errorMessage)
-            throw RepositoryError.sqlite(message: message)
+            throw RepositoryError.sqlite(code: sqlite3_errcode(database), message: message)
         }
     }
 
@@ -461,22 +909,22 @@ actor PowerHistoryRepository {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else {
-            throw RepositoryError.sqlite(message: String(cString: sqlite3_errmsg(database)))
+            throw databaseError(database)
         }
         return statement
     }
 
     private static func stepDone(_ statement: OpaquePointer, in database: OpaquePointer) throws {
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw RepositoryError.sqlite(message: String(cString: sqlite3_errmsg(database)))
-        }
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw databaseError(database) }
     }
 
-    private static func checkCompletion(of statement: OpaquePointer, in database: OpaquePointer) throws {
-        let result = sqlite3_errcode(database)
-        guard result == SQLITE_OK || result == SQLITE_DONE || result == SQLITE_ROW else {
-            throw RepositoryError.sqlite(message: String(cString: sqlite3_errmsg(database)))
-        }
+    private static func databaseError(
+        _ database: OpaquePointer?,
+        fallbackCode: Int32 = SQLITE_ERROR
+    ) -> RepositoryError {
+        let code = database.map(sqlite3_errcode) ?? fallbackCode
+        let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "Unable to open database"
+        return .sqlite(code: code, message: message)
     }
 
     private static func optionalDouble(_ statement: OpaquePointer, column: Int32) -> Double? {
@@ -494,11 +942,6 @@ actor PowerHistoryRepository {
         index += 1
     }
 
-    private static func bind(_ value: Int, to statement: OpaquePointer, at index: inout Int32) {
-        sqlite3_bind_int(statement, index, Int32(value))
-        index += 1
-    }
-
     private static func bind(_ value: Int64, to statement: OpaquePointer, at index: inout Int32) {
         sqlite3_bind_int64(statement, index, value)
         index += 1
@@ -508,7 +951,7 @@ actor PowerHistoryRepository {
         if let value {
             sqlite3_bind_double(statement, index, value)
         } else {
-            sqlite3_bind_double(statement, index, 0)
+            sqlite3_bind_null(statement, index)
         }
         index += 1
     }

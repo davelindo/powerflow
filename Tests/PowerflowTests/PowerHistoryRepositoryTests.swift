@@ -1,110 +1,203 @@
 import Foundation
+import SQLite3
 import XCTest
 @testable import Powerflow
 
 final class PowerHistoryRepositoryTests: XCTestCase {
-    func testAggregatesMinuteBucketsAndBuildsReportSummary() async throws {
+    func testIntegratesElapsedTimeAcrossMinuteBoundaries() async throws {
         let fixture = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let base = Date(timeIntervalSince1970: 1_800_000_000)
 
         try await fixture.repository.record(
-            observation: observation(at: base, systemLoad: 20, adapterInput: 30, health: 90, cycles: 120),
-            appImpact: nil
+            observation: observation(at: base, uptime: 1_000, systemLoad: 20, adapterInput: 30, health: 90, cycles: 120)
         )
         try await fixture.repository.record(
-            observation: observation(at: base.addingTimeInterval(20), systemLoad: 40, adapterInput: 50, health: 88, cycles: 120),
-            appImpact: nil
+            observation: observation(at: base.addingTimeInterval(20), uptime: 1_020, systemLoad: 40, adapterInput: 50, health: 88, cycles: 120)
         )
         try await fixture.repository.record(
-            observation: observation(at: base.addingTimeInterval(70), systemLoad: 10, adapterInput: 0, health: 88, cycles: 121),
-            appImpact: nil
+            observation: observation(at: base.addingTimeInterval(70), uptime: 1_070, systemLoad: 10, adapterInput: 0, health: 88, cycles: 121)
         )
 
         let report = try await fixture.repository.report(range: .hour, endingAt: base.addingTimeInterval(90))
 
         XCTAssertEqual(report.points.count, 2)
-        XCTAssertEqual(report.points[0].systemLoad, 30, accuracy: 0.001)
-        XCTAssertEqual(report.summary.averageSystemLoad, 70.0 / 3.0, accuracy: 0.001)
+        XCTAssertEqual(report.points[0].systemLoad, 1_720.0 / 60.0, accuracy: 0.001)
+        XCTAssertEqual(report.points[1].systemLoad, 13, accuracy: 0.001)
+        XCTAssertEqual(report.summary.averageSystemLoad, 1_850.0 / 70.0, accuracy: 0.001)
         XCTAssertEqual(report.summary.peakSystemLoad, 40, accuracy: 0.001)
-        XCTAssertEqual(report.summary.observedEnergyWh, 40.0 / 60.0, accuracy: 0.001)
+        XCTAssertEqual(report.summary.observedEnergyWh, 1_850.0 / 3_600.0, accuracy: 0.000_001)
+        XCTAssertEqual(report.summary.coverageFraction, 70.0 / 3_600.0, accuracy: 0.000_001)
         XCTAssertEqual(report.summary.latestCycleCount, 121)
         XCTAssertEqual(report.summary.cycleCountChange, 1)
+        XCTAssertFalse(report.summary.cycleCountResetDetected)
+        try await fixture.repository.close()
+    }
+
+    func testValidatedEnergyDeltaOverridesTrapezoidEstimate() async throws {
+        let fixture = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+
+        try await fixture.repository.record(
+            observation: observation(at: base, uptime: 100, systemLoad: 10)
+        )
+        try await fixture.repository.record(
+            observation: observation(
+                at: base.addingTimeInterval(10),
+                uptime: 110,
+                systemLoad: 10,
+                systemEnergyDeltaWh: 0.2
+            )
+        )
+
+        let report = try await fixture.repository.report(range: .hour, endingAt: base.addingTimeInterval(15))
+        XCTAssertEqual(report.summary.observedEnergyWh, 0.2, accuracy: 0.000_001)
+        XCTAssertEqual(report.summary.averageSystemLoad, 72, accuracy: 0.001)
+        try await fixture.repository.close()
+    }
+
+    func testRejectsSleepAndClockJumpIntervals() async throws {
+        let fixture = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+
+        try await fixture.repository.record(
+            observation: observation(at: base, uptime: 100, systemLoad: 10)
+        )
+        try await fixture.repository.record(
+            observation: observation(at: base.addingTimeInterval(300), uptime: 105, systemLoad: 500)
+        )
+        try await fixture.repository.record(
+            observation: observation(at: base.addingTimeInterval(305), uptime: 110, systemLoad: 20)
+        )
+
+        let report = try await fixture.repository.report(range: .hour, endingAt: base.addingTimeInterval(310))
+        XCTAssertEqual(report.summary.coverageFraction, 5.0 / 3_600.0, accuracy: 0.000_001)
+        XCTAssertEqual(report.summary.observedEnergyWh, 1_300.0 / 3_600.0, accuracy: 0.000_001)
+        try await fixture.repository.close()
+    }
+
+    func testDetectsCycleCounterResetChronologically() async throws {
+        let fixture = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let cycles = [304, 305, 2, 3]
+
+        for index in cycles.indices {
+            try await fixture.repository.record(
+                observation: observation(
+                    at: base.addingTimeInterval(Double(index * 10)),
+                    uptime: 1_000 + Double(index * 10),
+                    systemLoad: 10,
+                    cycles: cycles[index]
+                )
+            )
+        }
+
+        let report = try await fixture.repository.report(range: .hour, endingAt: base.addingTimeInterval(45))
+        XCTAssertEqual(report.summary.latestCycleCount, 3)
+        XCTAssertNil(report.summary.cycleCountChange)
+        XCTAssertTrue(report.summary.cycleCountResetDetected)
+        try await fixture.repository.close()
     }
 
     func testPrunesTelemetryOlderThanNinetyDays() async throws {
         let fixture = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = now.addingTimeInterval(-91 * 24 * 60 * 60)
 
+        try await fixture.repository.record(observation: observation(at: old, uptime: 100, systemLoad: 12))
         try await fixture.repository.record(
-            observation: observation(at: now.addingTimeInterval(-91 * 24 * 60 * 60), systemLoad: 12),
-            appImpact: nil
+            observation: observation(at: old.addingTimeInterval(5), uptime: 105, systemLoad: 12)
         )
+        try await fixture.repository.record(observation: observation(at: now, uptime: 1_000, systemLoad: 18))
         try await fixture.repository.record(
-            observation: observation(at: now, systemLoad: 18),
-            appImpact: nil
+            observation: observation(at: now.addingTimeInterval(5), uptime: 1_005, systemLoad: 18)
         )
 
         let storedMinuteCount = try await fixture.repository.storedMinuteCount()
         XCTAssertEqual(storedMinuteCount, 1)
+        try await fixture.repository.close()
     }
 
-    func testRestoresOnlyRecentApplicationImpactSamples() async throws {
-        let fixture = try makeRepository()
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let oldSample = AppImpactSample(timestamp: now.addingTimeInterval(-700), offenders: [offender(name: "Old")])
-        let recentSample = AppImpactSample(timestamp: now.addingTimeInterval(-60), offenders: [offender(name: "Recent")])
-
-        try await fixture.repository.record(
-            observation: observation(at: oldSample.timestamp, systemLoad: 8),
-            appImpact: oldSample
-        )
-        try await fixture.repository.record(
-            observation: observation(at: recentSample.timestamp, systemLoad: 9),
-            appImpact: recentSample
-        )
-
-        let samples = try await fixture.repository.recentAppImpactSamples(endingAt: now)
-        XCTAssertEqual(samples.flatMap(\.offenders).map(\.name), ["Recent"])
-    }
-
-    func testPersistsFreshApplicationEnergyWithoutTelemetryObservation() async throws {
-        let fixture = try makeRepository()
-        let timestamp = Date(timeIntervalSince1970: 1_800_000_000)
-        let sample = AppImpactSample(
-            timestamp: timestamp,
-            offenders: [offender(name: "Background", energyWh: 0.004)]
-        )
-
-        try await fixture.repository.record(appImpact: sample)
-
-        let restored = try await fixture.repository.recentAppImpactSamples(
-            endingAt: timestamp.addingTimeInterval(1)
-        )
-        XCTAssertEqual(restored.count, 1)
-        XCTAssertEqual(restored[0].offenders[0].estimatedEnergyWh, 0.004)
-        let storedMinuteCount = try await fixture.repository.storedMinuteCount()
-        XCTAssertEqual(storedMinuteCount, 0)
-    }
-
-    func testRecoversFromCorruptDatabaseFile() async throws {
+    func testRecoversOnlyFromCorruptDatabaseFile() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
         let databaseURL = directory.appendingPathComponent("history.sqlite3")
         try Data("not a database".utf8).write(to: databaseURL)
 
-        var repository: PowerHistoryRepository? = try PowerHistoryRepository(databaseURL: databaseURL)
-        try await repository?.record(
-            observation: observation(at: Date(), systemLoad: 22),
-            appImpact: nil
+        let repository = try PowerHistoryRepository(databaseURL: databaseURL)
+        let firstObservationAt = Self.minuteAligned(Date())
+        try await repository.record(
+            observation: observation(at: firstObservationAt, uptime: 100, systemLoad: 22)
+        )
+        try await repository.record(
+            observation: observation(
+                at: firstObservationAt.addingTimeInterval(5),
+                uptime: 105,
+                systemLoad: 22
+            )
         )
 
-        let storedMinuteCount = try await repository?.storedMinuteCount()
+        let storedMinuteCount = try await repository.storedMinuteCount()
         XCTAssertEqual(storedMinuteCount, 1)
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
-        XCTAssertTrue(files.contains { $0.contains("corrupt-") })
-        repository = nil
-        try? FileManager.default.removeItem(at: directory)
+        XCTAssertTrue(files.contains("history.sqlite3"))
+        XCTAssertFalse(files.contains { $0.contains("corrupt-") })
+        try await repository.close()
+    }
+
+    func testResetsInaccurateVersionOneDatabase() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("history.sqlite3")
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        XCTAssertEqual(
+            sqlite3_exec(
+                database,
+                "CREATE TABLE minute_history (minute INTEGER PRIMARY KEY); PRAGMA user_version=1;",
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+        sqlite3_close(database)
+
+        let repository = try PowerHistoryRepository(databaseURL: databaseURL)
+        let firstObservationAt = Self.minuteAligned(Date())
+        try await repository.record(
+            observation: observation(at: firstObservationAt, uptime: 100, systemLoad: 12)
+        )
+        try await repository.record(
+            observation: observation(
+                at: firstObservationAt.addingTimeInterval(5),
+                uptime: 105,
+                systemLoad: 12
+            )
+        )
+        let count = try await repository.storedMinuteCount()
+        XCTAssertEqual(count, 1)
+        try await repository.close()
+    }
+
+    func testDoesNotDeletePathForNonCorruptionOpenFailure() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        XCTAssertThrowsError(try PowerHistoryRepository(databaseURL: directory))
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
     }
 
     private func makeRepository() throws -> (repository: PowerHistoryRepository, directory: URL) {
@@ -114,15 +207,24 @@ final class PowerHistoryRepositoryTests: XCTestCase {
         return (try PowerHistoryRepository(databaseURL: databaseURL), directory)
     }
 
+    private static func minuteAligned(_ date: Date) -> Date {
+        let epoch = date.timeIntervalSince1970
+        return Date(timeIntervalSince1970: (epoch / 60).rounded(.down) * 60 + 1)
+    }
+
     private func observation(
         at date: Date,
+        uptime: TimeInterval,
         systemLoad: Double,
         adapterInput: Double = 25,
         health: Double = 89,
-        cycles: Int = 120
+        cycles: Int = 120,
+        systemEnergyDeltaWh: Double? = nil
     ) -> PowerHistoryObservation {
         var snapshot = PowerSnapshot.empty
         snapshot.timestamp = date
+        snapshot.monotonicUptime = uptime
+        snapshot.systemEnergyDeltaWh = systemEnergyDeltaWh
         snapshot.systemLoad = systemLoad
         snapshot.systemIn = adapterInput
         snapshot.batteryPower = adapterInput - systemLoad
@@ -140,23 +242,5 @@ final class PowerHistoryRepositoryTests: XCTestCase {
         snapshot.batteryCycleCountSMC = cycles
         snapshot.isExternalPowerConnected = adapterInput > 0
         return PowerHistoryObservation(snapshot: snapshot)
-    }
-
-    private func offender(name: String, energyWh: Double? = nil) -> AppEnergyOffender {
-        AppEnergyOffender(
-            groupID: name.lowercased(),
-            primaryPID: 42,
-            name: name,
-            iconPath: nil,
-            processCount: 1,
-            impactScore: 12,
-            cpuPercent: 10,
-            memoryBytes: 100_000_000,
-            pageinsPerSecond: 0,
-            activityShare: 0.5,
-            estimatedPowerWatts: energyWh.map { $0 * 3_600 / 5 },
-            estimatedEnergyWh: energyWh,
-            sampleDurationSeconds: energyWh == nil ? nil : 5
-        )
     }
 }

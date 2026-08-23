@@ -792,6 +792,7 @@ struct PowerSparkline: View {
     }
 }
 
+@MainActor
 private final class SparklinePointCache {
     static let shared = SparklinePointCache()
     private let maxEntries = 96

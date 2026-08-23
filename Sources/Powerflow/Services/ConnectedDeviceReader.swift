@@ -1,7 +1,9 @@
 import Foundation
 import IOKit
 
-final class ConnectedDeviceReader {
+/// Mutable refresh/cache state is protected by `cacheLock`; profiler work is
+/// serialized by `refreshQueue`.
+final class ConnectedDeviceReader: @unchecked Sendable {
     private static let refreshInterval: TimeInterval = 30
 
     private let profilerPath: String
@@ -148,31 +150,11 @@ final class ConnectedDeviceReader {
     }
 
     private func runBluetoothProfiler() -> Data? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: profilerPath)
-        process.arguments = ["SPBluetoothDataType", "-json"]
-
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-
-        let semaphore = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in semaphore.signal() }
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()
-            process.waitUntilExit()
-            return nil
-        }
-
-        guard process.terminationStatus == 0 else { return nil }
-        return output.fileHandleForReading.readDataToEndOfFile()
+        BoundedProcessRunner.run(
+            executableURL: URL(fileURLWithPath: profilerPath),
+            arguments: ["SPBluetoothDataType", "-json"],
+            timeout: timeout
+        )
     }
 
     private func readHIDDevices() -> [ConnectedPowerDevice] {

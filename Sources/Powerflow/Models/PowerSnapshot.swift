@@ -113,6 +113,12 @@ struct AppEnergyOffender: Codable, Equatable, Identifiable, Sendable {
     var id: String { groupID }
 }
 
+enum PowerEnergySource: String, Codable, Equatable, Sendable {
+    case validatedSystemCounter
+    case packagePower
+    case systemMinusDisplay
+}
+
 enum ConnectedDeviceKind: String, Equatable {
     case headphones
     case mouse
@@ -134,6 +140,11 @@ struct ConnectedPowerDevice: Equatable, Identifiable {
 
 struct PowerSnapshot: Equatable {
     var timestamp: Date
+    var monotonicUptime: TimeInterval = 0
+    var systemEnergyDeltaWh: Double? = nil
+    var computeEnergySource: PowerEnergySource? = nil
+    var appEnergySampleDurationSeconds: TimeInterval? = nil
+    var appEnergyTotalBudgetWh: Double? = nil
     var isCharging: Bool
     var isExternalPowerConnected: Bool
     var batteryLevel: Int

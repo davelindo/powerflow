@@ -22,15 +22,23 @@ Fork reference: https://github.com/lzt1008/powerflow
 - Persistent local power and battery reports with 1-hour through 90-day ranges.
 - Observed energy, adapter-time, temperature, capacity-health, and cycle-count trends.
 - Battery health, remaining Wh, cycle count, and temperature visibility.
-- Rolling ten-minute relative application-impact summary.
+- Rolling ten-minute application-energy estimate using duration-integrated power budgets.
 - Battery guidance links to Apple's built-in battery management documentation.
 - Diagnostics view for SMC/IORegistry/telemetry data and fan readings.
 
 ## Privacy
 
-Powerflow runs locally and does not include network, analytics, or updater code. The
-Recent Offenders section samples local process activity to identify apps with notable
-CPU, memory, and paging activity; this can be disabled in Settings.
+Powerflow runs locally and does not include network, analytics, or updater code.
+Reports store numeric one-minute power and battery summaries in Application Support;
+they do not store process, device, account, hostname, or hardware-serial identifiers.
+
+Application-energy attribution samples local CPU time and paging activity. To make the
+rolling ten-minute view survive an app restart, Powerflow keeps a private cache containing
+only timestamps, interval energy, bundle identifiers, app display names, active duration,
+and peak estimated power. It omits PIDs, executable paths, memory figures, paging figures,
+and non-bundle process names. Turning off **Track application energy** stops sampling and
+deletes that cache. Connected-device data is read only while the Devices tab is selected
+and is never persisted.
 
 ## Requirements
 

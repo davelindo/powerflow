@@ -613,7 +613,7 @@ struct SettingsView: View {
                 Toggle("Track application energy", isOn: $appState.settings.showAppEnergyOffenders)
                     .toggleStyle(.switch)
                     .help("Integrates measured compute power and allocates energy from local CPU and paging activity. No process activity leaves this Mac.")
-                    .accessibilityHint("Tracks estimated application energy locally. Turn off to stop sampling and clear application rows.")
+                    .accessibilityHint("Tracks estimated application energy locally. Turn off to stop sampling and delete the private ten-minute restart cache.")
                     .padding(.vertical, 10)
             }
         }

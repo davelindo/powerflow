@@ -70,6 +70,7 @@ struct PowerReportSummary: Equatable, Sendable {
     let latestDesignMAh: Double?
     let latestCycleCount: Int?
     let cycleCountChange: Int?
+    let cycleCountResetDetected: Bool
 
     static let empty = PowerReportSummary(
         averageSystemLoad: 0,
@@ -83,7 +84,8 @@ struct PowerReportSummary: Equatable, Sendable {
         latestFullChargeMAh: nil,
         latestDesignMAh: nil,
         latestCycleCount: nil,
-        cycleCountChange: nil
+        cycleCountChange: nil,
+        cycleCountResetDetected: false
     )
 }
 
@@ -107,6 +109,8 @@ struct PowerReportState: Equatable, Sendable {
 
 struct PowerHistoryObservation: Sendable {
     let timestamp: Date
+    let monotonicUptime: TimeInterval
+    let systemEnergyDeltaWh: Double?
     let systemLoad: Double
     let adapterInput: Double
     let batteryPower: Double
@@ -124,6 +128,10 @@ struct PowerHistoryObservation: Sendable {
 
     init(snapshot: PowerSnapshot) {
         timestamp = snapshot.timestamp
+        monotonicUptime = snapshot.monotonicUptime
+        systemEnergyDeltaWh = snapshot.systemEnergyDeltaWh.flatMap { value in
+            value.isFinite && value >= 0 ? value : nil
+        }
         systemLoad = Self.nonnegativePower(snapshot.systemLoad)
         adapterInput = Self.nonnegativePower(snapshot.systemIn)
         batteryPower = snapshot.batteryPower.isFinite ? snapshot.batteryPower : 0

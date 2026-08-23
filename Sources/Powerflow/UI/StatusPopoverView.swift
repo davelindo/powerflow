@@ -3,6 +3,7 @@ import SwiftUI
 
 struct StatusPopoverView: View {
     @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject private var popoverStore: PopoverStateStore
     @State private var showingSettings: Bool
     private let appState: AppState
@@ -25,6 +26,23 @@ struct StatusPopoverView: View {
     }
 
     var body: some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                ScrollView {
+                    popoverContent
+                        .frame(minHeight: 460)
+                }
+                .scrollIndicators(.automatic)
+            } else {
+                popoverContent
+            }
+        }
+        .frame(width: 420, height: 460)
+        .modifier(SnapshotShellModifier(enabled: snapshotRendering))
+        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: showingSettings)
+    }
+
+    private var popoverContent: some View {
         VStack(spacing: 0) {
             PopoverHeader(showingSettings: $showingSettings)
 
@@ -43,7 +61,8 @@ struct StatusPopoverView: View {
                         state: popoverStore.state,
                         initialSelectedTab: initialSelectedTab,
                         initialReportMode: initialReportMode,
-                        onReportRangeChange: appState.selectReportRange
+                        onReportRangeChange: appState.selectReportRange,
+                        onTabChange: appState.selectDashboardTab
                     )
                     .transition(
                         .asymmetric(
@@ -54,11 +73,8 @@ struct StatusPopoverView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
         }
-        .frame(width: 420, height: 460)
-        .modifier(SnapshotShellModifier(enabled: snapshotRendering))
-        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: showingSettings)
+        .frame(width: 420)
     }
 }
 
@@ -204,58 +220,97 @@ struct LongHoverDetailsModifier<Detail: View>: ViewModifier {
     let title: String
     let systemImage: String
     let detail: Detail
-    @State private var isHovering = false
+    @State private var isSourceHovering = false
+    @State private var isDetailHovering = false
+    @State private var isPinned = false
     @State private var isPresented = false
     @State private var revealTask: Task<Void, Never>?
+    @State private var dismissTask: Task<Void, Never>?
 
     func body(content: Content) -> some View {
-        content
-            .background(
-                isHovering ? Color.accentColor.opacity(0.07) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
-            .overlay(alignment: .topTrailing) {
-                Image(systemName: "info.circle.fill")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .opacity(isHovering ? 0.75 : 0)
-                    .padding(3)
-                    .accessibilityHidden(true)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .onHover(perform: updateHover)
-            .onTapGesture {
-                revealTask?.cancel()
-                isPresented.toggle()
-            }
+        Button(action: togglePinnedPresentation) {
+            content
+                .background(
+                    isSourceHovering ? Color.accentColor.opacity(0.07) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: isPinned ? "pin.fill" : "info.circle.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .opacity((isSourceHovering || isPinned) ? 0.8 : 0)
+                        .padding(3)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+            .buttonStyle(.plain)
+            .onHover(perform: updateSourceHover)
             .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-                HoverDetailCard(title: title, systemImage: systemImage) {
+                HoverDetailCard(
+                    title: title,
+                    systemImage: systemImage,
+                    onClose: closePresentation
+                ) {
                     detail
                 }
+                .onHover(perform: updateDetailHover)
             }
-            .accessibilityHint("Pause or click to show advanced details")
-            .accessibilityAction(named: "Show advanced details") {
-                isPresented = true
-            }
+            .help("Show \(title.lowercased())")
+            .accessibilityLabel(title)
+            .accessibilityHint("Pause the pointer or press to show advanced details")
             .onDisappear {
                 revealTask?.cancel()
+                dismissTask?.cancel()
             }
     }
 
-    private func updateHover(_ hovering: Bool) {
-        isHovering = hovering
+    private func updateSourceHover(_ hovering: Bool) {
+        isSourceHovering = hovering
         revealTask?.cancel()
 
         guard hovering else {
-            isPresented = false
+            scheduleDismissIfNeeded()
             return
         }
 
+        dismissTask?.cancel()
         revealTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(650))
-            guard !Task.isCancelled, isHovering else { return }
+            guard !Task.isCancelled, isSourceHovering else { return }
             isPresented = true
         }
+    }
+
+    private func updateDetailHover(_ hovering: Bool) {
+        isDetailHovering = hovering
+        if hovering {
+            dismissTask?.cancel()
+        } else {
+            scheduleDismissIfNeeded()
+        }
+    }
+
+    private func togglePinnedPresentation() {
+        revealTask?.cancel()
+        dismissTask?.cancel()
+        isPinned.toggle()
+        isPresented = isPinned
+    }
+
+    private func scheduleDismissIfNeeded() {
+        dismissTask?.cancel()
+        guard !isPinned else { return }
+        dismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled, !isSourceHovering, !isDetailHovering, !isPinned else { return }
+            isPresented = false
+        }
+    }
+
+    private func closePresentation() {
+        isPinned = false
+        isPresented = false
     }
 }
 
@@ -264,6 +319,7 @@ struct HoverDetailCard<Content: View>: View {
 
     let title: String
     let systemImage: String
+    let onClose: () -> Void
     let content: Content
 
     private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -271,10 +327,12 @@ struct HoverDetailCard<Content: View>: View {
     init(
         title: String,
         systemImage: String,
+        onClose: @escaping () -> Void,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.systemImage = systemImage
+        self.onClose = onClose
         self.content = content()
     }
 
@@ -297,8 +355,18 @@ struct HoverDetailCard<Content: View>: View {
 
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
+            HStack {
+                Label(title, systemImage: systemImage)
+                    .font(.headline)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityLabel("Close details")
+            }
 
             Divider()
 

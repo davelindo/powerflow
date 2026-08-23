@@ -5,6 +5,33 @@ import Foundation
 struct AppImpactSample: Sendable {
     let timestamp: Date
     let offenders: [AppEnergyOffender]
+    let durationSeconds: TimeInterval
+    let totalComputeEnergyWh: Double?
+
+    init(
+        timestamp: Date,
+        offenders: [AppEnergyOffender],
+        durationSeconds: TimeInterval? = nil,
+        totalComputeEnergyWh: Double? = nil
+    ) {
+        self.timestamp = timestamp
+        self.offenders = offenders
+        self.durationSeconds = durationSeconds
+            ?? offenders.compactMap(\.sampleDurationSeconds).max()
+            ?? 0
+        self.totalComputeEnergyWh = totalComputeEnergyWh ?? offenders.lazy.compactMap { offender in
+            guard let energy = offender.estimatedEnergyWh,
+                  let share = offender.activityShare,
+                  energy.isFinite,
+                  energy >= 0,
+                  share.isFinite,
+                  share > 0,
+                  share <= 1 else {
+                return nil
+            }
+            return energy / share
+        }.first
+    }
 }
 
 @MainActor
@@ -30,6 +57,7 @@ final class AppState: ObservableObject {
     private let warmupStore = PowerWarmupStore()
     private let monitor: PowerMonitor
     private let powerSourceMonitor: PowerSourceMonitor
+    private let appImpactCache: AppImpactCache?
     private var historyRepository: PowerHistoryRepository?
     let popoverStore: PopoverStateStore
     private var isApplyingSettingsChange = false
@@ -39,10 +67,19 @@ final class AppState: ObservableObject {
     private var appImpactHistory: [AppImpactSample]
     private var reportState: PowerReportState
     private var reportRange: PowerReportRange
+    private var selectedDashboardTab: PowerflowDashboardTab = .live
     private var pendingSnapshot: PendingSnapshot?
     private var lastHistorySampleAt: Date?
     private var lastConsistencyRetryAt: Date?
     private var lastReportRefreshMinute: Int64?
+    private var appImpactGeneration = 0
+    private var reportRequestGeneration = 0
+    private var historyWriteTask: Task<Void, Never>?
+    private var appImpactWriteTask: Task<Void, Never>?
+    private var appImpactHydrationTask: Task<Void, Never>?
+    private var reportLoadTask: Task<Void, Never>?
+    private var repositoryInitializationTask: Task<Void, Never>?
+    private var isShuttingDown = false
     private var shouldPersistSettings = true
     private var modelIdentifier: String? {
         SystemInfoReader.hardwareModel()
@@ -103,6 +140,7 @@ final class AppState: ObservableObject {
         reportRange = .day
         historyRepository = nil
         reportState = .empty(range: .day, isLoading: true)
+        appImpactCache = try? AppImpactCache()
         popoverStore = PopoverStateStore()
         statusBarTitle = PowerFormatter.statusTitle(
             snapshot: initialSnapshot,
@@ -141,6 +179,7 @@ final class AppState: ObservableObject {
         monitor.start(with: storedSettings, isPopoverVisible: isPopoverVisible, warmup: shouldWarmup)
         powerSourceMonitor.start()
         initializeHistoryRepository()
+        configureInitialAppImpactCache()
     }
 
     private init(snapshotTestState: SnapshotTestState) {
@@ -162,6 +201,7 @@ final class AppState: ObservableObject {
         ]
         reportRange = .day
         historyRepository = nil
+        appImpactCache = nil
         reportState = snapshotTestState.report
         lastHistorySampleAt = seededHistory.last?.timestamp
         popoverStore = PopoverStateStore()
@@ -210,9 +250,29 @@ final class AppState: ObservableObject {
         )
     }
 
-    func stop() {
-        monitor.stop()
+    func shutdown() async {
+        guard !isShuttingDown else { return }
+        isShuttingDown = true
         powerSourceMonitor.stop()
+        await monitor.stopAndWait()
+        reportLoadTask?.cancel()
+        appImpactHydrationTask?.cancel()
+        repositoryInitializationTask?.cancel()
+        await reportLoadTask?.value
+        await appImpactHydrationTask?.value
+        await repositoryInitializationTask?.value
+        await historyWriteTask?.value
+        if let historyRepository {
+            try? await historyRepository.close()
+        }
+        await appImpactWriteTask?.value
+        if settings.showAppEnergyOffenders, let appImpactCache {
+            try? await appImpactCache.persist(
+                appImpactHistory,
+                generation: appImpactGeneration,
+                force: true
+            )
+        }
     }
 
     func selectReportRange(_ range: PowerReportRange) {
@@ -225,18 +285,23 @@ final class AppState: ObservableObject {
         refreshPersistentReport()
     }
 
+    func selectDashboardTab(_ tab: PowerflowDashboardTab) {
+        guard tab != selectedDashboardTab else { return }
+        selectedDashboardTab = tab
+        monitor.setConnectedDevicesVisible(isPopoverVisible && tab == .devices)
+        if isPopoverVisible {
+            refreshPopoverState(using: latestSnapshot)
+        }
+    }
+
     private func apply(_ snapshot: PowerSnapshot) {
+        guard !isShuttingDown else { return }
         let freshAppImpact = captureFreshAppImpact(from: snapshot)
+        persistAppImpact(freshAppImpact)
         guard let acceptedSnapshot = resolveSnapshot(snapshot) else {
-            persistAppImpact(freshAppImpact)
             return
         }
-        let acceptedAppImpact = freshAppImpact.flatMap { sample in
-            acceptedSnapshot.timestamp == sample.timestamp ? sample : nil
-        }
-        if acceptedAppImpact == nil {
-            persistAppImpact(freshAppImpact)
-        }
+        let previousSnapshot = latestSnapshot
         latestSnapshot = acceptedSnapshot
         let levelDelta = abs(statusSnapshot.batteryLevelPrecise - acceptedSnapshot.batteryLevelPrecise)
         if statusSnapshot.batteryLevel != acceptedSnapshot.batteryLevel
@@ -248,11 +313,25 @@ final class AppState: ObservableObject {
         if self.snapshot != acceptedSnapshot {
             self.snapshot = acceptedSnapshot
         }
-        appendHistory(acceptedSnapshot, appImpactToPersist: acceptedAppImpact)
+        persistHistory(acceptedSnapshot)
+        appendHistory(acceptedSnapshot)
         refreshStatusBarTitle(using: acceptedSnapshot)
 
         guard isPopoverVisible else { return }
-        refreshPopoverState(using: acceptedSnapshot)
+        let powerStateChanged = PowerStateKind(snapshot: previousSnapshot)
+            != PowerStateKind(snapshot: acceptedSnapshot)
+        switch selectedDashboardTab {
+        case .live:
+            refreshPopoverState(using: acceptedSnapshot)
+        case .reports:
+            if powerStateChanged {
+                refreshPopoverState(using: acceptedSnapshot)
+            }
+        case .devices:
+            if powerStateChanged || previousSnapshot.connectedDevices != acceptedSnapshot.connectedDevices {
+                refreshPopoverState(using: acceptedSnapshot)
+            }
+        }
     }
 
     private func refreshStatusBarTitle(using snapshot: PowerSnapshot) {
@@ -286,6 +365,9 @@ final class AppState: ObservableObject {
             && !resolvedSettings.showAppEnergyOffenders
         if clearedAppEnergyOffenders {
             clearAppEnergyOffenders()
+        } else if !oldValue.showAppEnergyOffenders && resolvedSettings.showAppEnergyOffenders {
+            appImpactGeneration += 1
+            enqueueAppImpactCacheConfiguration(enabled: true)
         }
         refreshStatusBarTitle(using: latestSnapshot)
         if isPopoverVisible || clearedAppEnergyOffenders {
@@ -315,12 +397,9 @@ final class AppState: ObservableObject {
     }
 
     private func clearAppEnergyOffenders() {
+        appImpactGeneration += 1
         appImpactHistory.removeAll()
-        if let historyRepository {
-            Task {
-                try? await historyRepository.clearAppImpact()
-            }
-        }
+        enqueueAppImpactCacheConfiguration(enabled: false)
         latestSnapshot.appEnergyOffenders = []
         if !snapshot.appEnergyOffenders.isEmpty {
             snapshot.appEnergyOffenders = []
@@ -334,10 +413,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func appendHistory(
-        _ snapshot: PowerSnapshot,
-        appImpactToPersist: AppImpactSample?
-    ) {
+    private func appendHistory(_ snapshot: PowerSnapshot) {
         let now = snapshot.timestamp
         let hasFreshAppEnergy = snapshot.appEnergyOffenders.contains {
             $0.estimatedEnergyWh != nil
@@ -373,37 +449,72 @@ final class AppState: ObservableObject {
             fanPercentMax: fanPercentMax
         )
         historyBuffer.append(point)
-        if settings.showAppEnergyOffenders {
-            appendAppImpactSample(
-                AppImpactSample(
-                    timestamp: snapshot.timestamp,
-                    offenders: snapshot.appEnergyOffenders
-                )
-            )
-        }
         if historyBuffer.count > historyCapacity {
             historyBuffer.removeFirst(historyBuffer.count - historyCapacity)
         }
-        persistHistory(snapshot, appImpact: appImpactToPersist)
     }
 
     private func captureFreshAppImpact(from snapshot: PowerSnapshot) -> AppImpactSample? {
         guard settings.showAppEnergyOffenders,
-              snapshot.appEnergyOffenders.contains(where: { $0.estimatedEnergyWh != nil }) else {
+              let duration = snapshot.appEnergySampleDurationSeconds,
+              duration.isFinite,
+              duration > 0 else {
             return nil
         }
         let sample = AppImpactSample(
             timestamp: snapshot.timestamp,
-            offenders: snapshot.appEnergyOffenders
+            offenders: snapshot.appEnergyOffenders,
+            durationSeconds: duration,
+            totalComputeEnergyWh: snapshot.appEnergyTotalBudgetWh
         )
         appendAppImpactSample(sample)
         return sample
     }
 
     private func persistAppImpact(_ sample: AppImpactSample?) {
-        guard let sample, let historyRepository else { return }
-        Task {
-            try? await historyRepository.record(appImpact: sample)
+        guard sample != nil, let appImpactCache else { return }
+        let samples = appImpactHistory
+        let generation = appImpactGeneration
+        let previousTask = appImpactWriteTask
+        appImpactWriteTask = Task {
+            await previousTask?.value
+            guard !Task.isCancelled else { return }
+            try? await appImpactCache.persist(samples, generation: generation)
+        }
+    }
+
+    private func configureInitialAppImpactCache() {
+        guard let appImpactCache else { return }
+        let generation = appImpactGeneration
+        let enabled = settings.showAppEnergyOffenders
+        appImpactHydrationTask = Task { [weak self] in
+            try? await appImpactCache.setEnabled(enabled, generation: generation)
+            guard enabled, !Task.isCancelled else { return }
+            let restored = await appImpactCache.restore(generation: generation)
+            guard let self,
+                  !Task.isCancelled,
+                  !self.isShuttingDown,
+                  generation == self.appImpactGeneration,
+                  self.settings.showAppEnergyOffenders else {
+                return
+            }
+            for sample in restored {
+                self.appendAppImpactSample(sample)
+            }
+            if self.isPopoverVisible {
+                self.refreshPopoverState(using: self.latestSnapshot)
+            }
+        }
+    }
+
+    private func enqueueAppImpactCacheConfiguration(enabled: Bool) {
+        guard let appImpactCache else { return }
+        let generation = appImpactGeneration
+        let previousTask = appImpactWriteTask
+        appImpactWriteTask = Task {
+            await previousTask?.value
+            guard !Task.isCancelled else { return }
+            try? await appImpactCache.setEnabled(enabled, generation: generation)
         }
     }
 
@@ -416,10 +527,7 @@ final class AppState: ObservableObject {
         appImpactHistory.removeAll { $0.timestamp < cutoff }
     }
 
-    private func persistHistory(
-        _ snapshot: PowerSnapshot,
-        appImpact: AppImpactSample?
-    ) {
+    private func persistHistory(_ snapshot: PowerSnapshot) {
         guard let historyRepository else { return }
         let observation = PowerHistoryObservation(snapshot: snapshot)
         let minute = Int64(snapshot.timestamp.timeIntervalSince1970 / 60)
@@ -428,11 +536,14 @@ final class AppState: ObservableObject {
             lastReportRefreshMinute = minute
         }
 
-        Task { [weak self] in
+        let previousTask = historyWriteTask
+        historyWriteTask = Task { [weak self] in
+            await previousTask?.value
+            guard !Task.isCancelled else { return }
             do {
-                try await historyRepository.record(observation: observation, appImpact: appImpact)
+                try await historyRepository.record(observation: observation)
                 guard shouldRefreshReport, let self else { return }
-                await self.loadPersistentReport(endingAt: snapshot.timestamp)
+                self.refreshPersistentReport(endingAt: snapshot.timestamp)
             } catch {
                 guard shouldRefreshReport, let self else { return }
                 self.applyReportFailure(error)
@@ -514,25 +625,35 @@ final class AppState: ObservableObject {
     }
 
     private func makePopoverState(snapshot: PowerSnapshot, settings: PowerSettings) -> PopoverViewState {
-        let offenders = settings.showAppEnergyOffenders
+        let current = popoverStore.state
+        let isLive = selectedDashboardTab == .live
+        let isInitialState = current == .empty
+        let shouldBuildLive = isLive || isInitialState
+        let offenders = shouldBuildLive && settings.showAppEnergyOffenders
             ? makeOffenderRows(from: snapshot.appEnergyOffenders)
             : []
-        let appImpact = settings.showAppEnergyOffenders
+        let appImpact = shouldBuildLive && settings.showAppEnergyOffenders
             ? Self.makeAppImpactRows(from: appImpactHistory)
             : []
-        AppIconCache.shared.prefetch(
-            paths: (offenders.compactMap(\.iconPath) + appImpact.compactMap(\.iconPath))
-        )
+        if shouldBuildLive {
+            AppIconCache.shared.prefetch(
+                paths: (offenders.compactMap(\.iconPath) + appImpact.compactMap(\.iconPath))
+            )
+        }
 
         return PopoverViewState(
             overview: makeOverviewState(snapshot: snapshot, settings: settings),
-            flow: makeFlowState(snapshot: snapshot),
-            connectedDevices: makeConnectedDevicesState(snapshot: snapshot),
-            history: makeHistoryState(
-                offenders: offenders,
-                appImpact: appImpact,
-                isAppImpactEnabled: settings.showAppEnergyOffenders
-            ),
+            flow: shouldBuildLive ? makeFlowState(snapshot: snapshot) : current.flow,
+            connectedDevices: selectedDashboardTab == .devices || isInitialState
+                ? makeConnectedDevicesState(snapshot: snapshot)
+                : current.connectedDevices,
+            history: shouldBuildLive
+                ? makeHistoryState(
+                    offenders: offenders,
+                    appImpact: appImpact,
+                    isAppImpactEnabled: settings.showAppEnergyOffenders
+                )
+                : current.history,
             report: reportState
         )
     }
@@ -640,25 +761,18 @@ final class AppState: ObservableObject {
             var peakIntervalDuration = 0.0
             var hasIntegratedEnergy = false
             var peakCPU: Double = 0
-            var activeSamples: Int = 0
+            var activeSeconds: TimeInterval = 0
         }
 
         guard !samples.isEmpty else { return [] }
         var accumulators: [String: Accumulator] = [:]
         var totalComputeEnergyWh = 0.0
+        var totalObservedSeconds = 0.0
         for sample in samples {
-            if let sampleBudget = sample.offenders.lazy.compactMap({ offender -> Double? in
-                guard let energy = offender.estimatedEnergyWh,
-                      energy.isFinite,
-                      energy >= 0,
-                      let share = offender.activityShare,
-                      share.isFinite,
-                      share > 0,
-                      share <= 1 else {
-                    return nil
-                }
-                return energy / share
-            }).first {
+            totalObservedSeconds += max(sample.durationSeconds, 0)
+            if let sampleBudget = sample.totalComputeEnergyWh,
+               sampleBudget.isFinite,
+               sampleBudget >= 0 {
                 totalComputeEnergyWh += sampleBudget
             }
 
@@ -681,14 +795,14 @@ final class AppState: ObservableObject {
                     }
                 }
                 value.peakCPU = max(value.peakCPU, offender.cpuPercent)
-                value.activeSamples += 1
+                let activeDuration = offender.sampleDurationSeconds ?? sample.durationSeconds
+                value.activeSeconds += min(max(activeDuration, 0), max(sample.durationSeconds, 0))
                 accumulators[offender.id] = value
             }
         }
 
         let totalImpact = accumulators.values.reduce(0) { $0 + $1.totalImpact }
-        guard totalImpact > 0 else { return [] }
-        let sampleCount = max(samples.count, 1)
+        guard totalImpact > 0 || totalComputeEnergyWh > 0 else { return [] }
         let hasIntegratedEnergy = accumulators.values.contains { $0.hasIntegratedEnergy }
 
         return accumulators
@@ -696,8 +810,10 @@ final class AppState: ObservableObject {
             .map { id, value in
                 let share = hasIntegratedEnergy && totalComputeEnergyWh > 0
                     ? (value.totalEnergyWh / totalComputeEnergyWh) * 100
-                    : (value.totalImpact / totalImpact) * 100
-                let activePercent = (Double(value.activeSamples) / Double(sampleCount)) * 100
+                    : (totalImpact > 0 ? (value.totalImpact / totalImpact) * 100 : 0)
+                let activePercent = totalObservedSeconds > 0
+                    ? (value.activeSeconds / totalObservedSeconds) * 100
+                    : 0
                 let energy = value.hasIntegratedEnergy
                     ? value.totalEnergyWh
                     : nil
@@ -929,6 +1045,10 @@ final class AppState: ObservableObject {
 
     private func handlePopoverVisibilityChange() {
         monitor.applySettings(settings, isPopoverVisible: isPopoverVisible)
+        if !isPopoverVisible {
+            selectedDashboardTab = .live
+        }
+        monitor.setConnectedDevicesVisible(isPopoverVisible && selectedDashboardTab == .devices)
         guard isPopoverVisible else { return }
         snapshot = latestSnapshot
         refreshPopoverState(using: latestSnapshot)
@@ -936,34 +1056,12 @@ final class AppState: ObservableObject {
         monitor.triggerImmediateUpdate()
     }
 
-    private func hydratePersistedHistory() {
-        guard let historyRepository else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                async let samples = historyRepository.recentAppImpactSamples()
-                async let report = historyRepository.report(range: reportRange)
-                let loadedSamples = try await samples
-                let loadedReport = try await report
-                for sample in loadedSamples {
-                    appendAppImpactSample(sample)
-                }
-                reportState = loadedReport
-                if isPopoverVisible {
-                    refreshPopoverState(using: latestSnapshot)
-                }
-            } catch {
-                applyReportFailure(error)
-            }
-        }
-    }
-
     private func initializeHistoryRepository() {
-        Task { [weak self] in
+        repositoryInitializationTask = Task { [weak self] in
             let repository = await Task.detached(priority: .utility) {
                 try? PowerHistoryRepository()
             }.value
-            guard let self else { return }
+            guard let self, !Task.isCancelled else { return }
             guard let repository else {
                 reportState = .empty(range: reportRange)
                 if isPopoverVisible {
@@ -972,36 +1070,47 @@ final class AppState: ObservableObject {
                 return
             }
             historyRepository = repository
-            hydratePersistedHistory()
+            refreshPersistentReport()
         }
     }
 
-    private func refreshPersistentReport() {
-        guard historyRepository != nil else { return }
+    private func refreshPersistentReport(endingAt endDate: Date = Date()) {
+        guard let historyRepository else { return }
+        reportRequestGeneration += 1
+        let requestGeneration = reportRequestGeneration
+        let requestedRange = reportRange
+        reportLoadTask?.cancel()
         reportState = PowerReportState(
-            range: reportRange,
-            points: reportState.range == reportRange ? reportState.points : [],
-            summary: reportState.range == reportRange ? reportState.summary : .empty,
+            range: requestedRange,
+            points: reportState.range == requestedRange ? reportState.points : [],
+            summary: reportState.range == requestedRange ? reportState.summary : .empty,
             isLoading: true,
             errorMessage: nil
         )
-        Task { [weak self] in
-            await self?.loadPersistentReport(endingAt: Date())
-        }
-    }
-
-    private func loadPersistentReport(endingAt endDate: Date) async {
-        guard let historyRepository else { return }
-        let requestedRange = reportRange
-        do {
-            let report = try await historyRepository.report(range: requestedRange, endingAt: endDate)
-            guard requestedRange == reportRange else { return }
-            reportState = report
-            if isPopoverVisible {
-                refreshPopoverState(using: latestSnapshot)
+        reportLoadTask = Task { [weak self] in
+            do {
+                let report = try await historyRepository.report(
+                    range: requestedRange,
+                    endingAt: endDate
+                )
+                guard let self,
+                      !Task.isCancelled,
+                      requestGeneration == self.reportRequestGeneration,
+                      requestedRange == self.reportRange else {
+                    return
+                }
+                self.reportState = report
+                if self.isPopoverVisible {
+                    self.refreshPopoverState(using: self.latestSnapshot)
+                }
+            } catch {
+                guard let self,
+                      !Task.isCancelled,
+                      requestGeneration == self.reportRequestGeneration else {
+                    return
+                }
+                self.applyReportFailure(error)
             }
-        } catch {
-            applyReportFailure(error)
         }
     }
 

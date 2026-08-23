@@ -6,10 +6,16 @@ enum PowerSnapshotDetailLevel {
 }
 
 protocol PowerDataProvider {
-    func readSnapshot(detailLevel: PowerSnapshotDetailLevel, settings: PowerSettings) -> PowerSnapshot
+    func readSnapshot(
+        detailLevel: PowerSnapshotDetailLevel,
+        settings: PowerSettings,
+        includeConnectedDevices: Bool
+    ) -> PowerSnapshot
 }
 
-final class MacPowerDataProvider: PowerDataProvider {
+/// Sampling is confined to `PowerMonitor`'s serial queue. The only secondary
+/// queue touches the profiler cache behind `profilerBatteryHealthLock`.
+final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
     private let ioReader = IORegistryReader()
     private let smcReader: SMCReader
     private let appEnergyMonitor = AppEnergyMonitor()
@@ -34,8 +40,11 @@ final class MacPowerDataProvider: PowerDataProvider {
     private var cachedProfilerBatteryHealth: CachedBatteryHealth?
     private var isRefreshingProfilerBatteryHealth = false
     private var lastComputePowerSample: (uptime: TimeInterval, watts: Double)?
+    private var lastComputeEnergySource: PowerEnergySource?
+    private var lastDisplayPowerSample: (uptime: TimeInterval, watts: Double)?
     private var pendingComputeEnergyWh = 0.0
     private var pendingComputeDuration = 0.0
+    private var systemEnergyCounterCalibrator = SystemEnergyCounterCalibrator()
 
     init() {
         isAppleSilicon = SystemInfoReader.isAppleSilicon()
@@ -85,8 +94,14 @@ final class MacPowerDataProvider: PowerDataProvider {
     private static let batteryHealthProfilerRefreshInterval: TimeInterval = 30 * 60
     private static let batteryHealthProfilerFailureRefreshInterval: TimeInterval = 60
 
-    func readSnapshot(detailLevel: PowerSnapshotDetailLevel, settings: PowerSettings) -> PowerSnapshot {
+    func readSnapshot(
+        detailLevel: PowerSnapshotDetailLevel,
+        settings: PowerSettings,
+        includeConnectedDevices: Bool
+    ) -> PowerSnapshot {
         let now = Date()
+        let processInfo = ProcessInfo.processInfo
+        let sampleUptime = processInfo.systemUptime
         let smcHints = smcReadHints(for: settings, detailLevel: detailLevel)
         let batteryInfo = ioReader.readBatteryInfo()
         let smc = Self.sanitizedSMC(
@@ -160,21 +175,50 @@ final class MacPowerDataProvider: PowerDataProvider {
         let (temperatureC, temperatureSource) = primaryTemperature(smc: smc, detailLevel: detailLevel)
         let batteryTemperatureC = smc.hasTemperature && smc.temperature > 0 ? smc.temperature : nil
         let batteryCellVoltages = resolveBatteryCellVoltages(smc: smc, batteryInfo: batteryInfo)
-        let processInfo = ProcessInfo.processInfo
+        let counterSystemEnergyWh = systemEnergyCounterCalibrator.energyDeltaWh(
+            rawCounter: telemetry?.accumulatedSystemEnergyConsumed,
+            systemLoadWatts: systemLoad,
+            uptime: sampleUptime
+        )
+        let displayEnergyWh = integratedDisplayEnergyWh(
+            watts: screenPowerAvailable ? screenPower : 0,
+            uptime: sampleUptime
+        )
         let appEnergyOffenders: [AppEnergyOffender]
+        var appEnergySampleDurationSeconds: TimeInterval?
+        var appEnergyTotalBudgetWh: Double?
         if settings.showAppEnergyOffenders {
             let computePowerBudget = Self.computePowerBudget(
                 systemLoad: systemLoad,
                 screenPower: screenPowerAvailable ? screenPower : nil,
                 packagePower: smc.hasHeatpipe ? heatpipePower : nil
             )
-            recordComputePower(watts: computePowerBudget, uptime: processInfo.systemUptime)
+            let source: PowerEnergySource
+            let directComputeEnergyWh: Double?
+            if let counterSystemEnergyWh {
+                source = .validatedSystemCounter
+                directComputeEnergyWh = max(counterSystemEnergyWh - (displayEnergyWh ?? 0), 0)
+            } else if smc.hasHeatpipe {
+                source = .packagePower
+                directComputeEnergyWh = nil
+            } else {
+                source = .systemMinusDisplay
+                directComputeEnergyWh = nil
+            }
+            recordComputePower(
+                watts: computePowerBudget,
+                uptime: sampleUptime,
+                source: source,
+                directEnergyWh: directComputeEnergyWh
+            )
             let activity = appEnergyMonitor.sample(
                 detailLevel: detailLevel,
                 at: now,
-                uptime: processInfo.systemUptime
+                uptime: sampleUptime
             )
             if activity.isFresh, pendingComputeDuration > 0 {
+                appEnergySampleDurationSeconds = pendingComputeDuration
+                appEnergyTotalBudgetWh = pendingComputeEnergyWh
                 appEnergyOffenders = Self.attributingEstimatedEnergy(
                     to: activity.offenders,
                     energyBudgetWh: pendingComputeEnergyWh,
@@ -193,9 +237,13 @@ final class MacPowerDataProvider: PowerDataProvider {
             resetComputeEnergyIntegration()
             appEnergyOffenders = []
         }
-        let connectedDevices = connectedDeviceReader.readDevices(detailLevel: detailLevel, now: now)
+        // Bluetooth/HID enumeration is intentionally demand-driven. In particular,
+        // `system_profiler` must never be launched merely because the popover is open.
+        let connectedDevices = includeConnectedDevices
+            ? connectedDeviceReader.readDevices(detailLevel: .full, now: now)
+            : []
 
-        return PowerSnapshot(
+        var snapshot = PowerSnapshot(
             timestamp: now,
             isCharging: batteryInfo.isCharging,
             isExternalPowerConnected: batteryInfo.isExternalConnected,
@@ -240,6 +288,12 @@ final class MacPowerDataProvider: PowerDataProvider {
             connectedDevices: connectedDevices,
             diagnostics: PowerDiagnostics(smc: smc, telemetry: telemetry)
         )
+        snapshot.monotonicUptime = sampleUptime
+        snapshot.systemEnergyDeltaWh = counterSystemEnergyWh
+        snapshot.computeEnergySource = lastComputeEnergySource
+        snapshot.appEnergySampleDurationSeconds = appEnergySampleDurationSeconds
+        snapshot.appEnergyTotalBudgetWh = appEnergyTotalBudgetWh
+        return snapshot
     }
 
     static func attributingEstimatedPower(
@@ -355,18 +409,35 @@ final class MacPowerDataProvider: PowerDataProvider {
         )
     }
 
-    private func recordComputePower(watts: Double, uptime: TimeInterval) {
-        defer { lastComputePowerSample = (uptime: uptime, watts: watts) }
+    private func recordComputePower(
+        watts: Double,
+        uptime: TimeInterval,
+        source: PowerEnergySource,
+        directEnergyWh: Double?
+    ) {
+        defer {
+            lastComputePowerSample = (uptime: uptime, watts: watts)
+            lastComputeEnergySource = source
+        }
         guard uptime.isFinite,
-              let previous = lastComputePowerSample else {
+              let previous = lastComputePowerSample,
+              source == lastComputeEnergySource else {
+            pendingComputeEnergyWh = 0
+            pendingComputeDuration = 0
             return
         }
         let duration = uptime - previous.uptime
-        guard let energy = Self.integratedEnergyWh(
+        let integrated = Self.integratedEnergyWh(
             previousWatts: previous.watts,
             currentWatts: watts,
             duration: duration
-        ) else {
+        )
+        let energy = directEnergyWh.flatMap { value in
+            value.isFinite && value >= 0 ? value : nil
+        } ?? integrated
+        guard let energy,
+              duration > 0,
+              duration <= PowerflowConstants.maxAppEnergyIntegrationInterval else {
             pendingComputeEnergyWh = 0
             pendingComputeDuration = 0
             return
@@ -377,14 +448,33 @@ final class MacPowerDataProvider: PowerDataProvider {
 
     private func resetComputeEnergyIntegration() {
         lastComputePowerSample = nil
+        lastComputeEnergySource = nil
         pendingComputeEnergyWh = 0
         pendingComputeDuration = 0
     }
 
+    private func integratedDisplayEnergyWh(watts: Double, uptime: TimeInterval) -> Double? {
+        defer { lastDisplayPowerSample = (uptime, watts) }
+        guard let previous = lastDisplayPowerSample else { return nil }
+        return Self.integratedEnergyWh(
+            previousWatts: previous.watts,
+            currentWatts: watts,
+            duration: uptime - previous.uptime
+        )
+    }
+
     private func batteryHealthPercent(smc: SMCPowerData, batteryInfo: BatteryInfo, now: Date) -> Double? {
+        let hasBatteryCapacityPair = (batteryInfo.fullChargeCapacityMAh ?? 0) > 0
+            && (batteryInfo.designCapacity ?? 0) > 0
+        let hasSMCCapacityPair = smc.hasDesignCapacity
+            && smc.hasFullChargeCapacity
+            && smc.designCapacity > 0
+            && smc.fullChargeCapacity > 0
         let profilerMaximumCapacityPercent = batteryInfo.maximumCapacityPercent == nil
-            ? profilerBatteryHealthPercent(now: now)
-            : nil
+            && !hasBatteryCapacityPair
+            && !hasSMCCapacityPair
+                ? profilerBatteryHealthPercent(now: now)
+                : nil
         return Self.resolvedBatteryHealthPercent(
             smc: smc,
             batteryInfo: batteryInfo,
@@ -448,11 +538,11 @@ final class MacPowerDataProvider: PowerDataProvider {
             return clampBatteryHealthPercent(profilerMaximumCapacityPercent)
         }
 
-        if let nominalChargeCapacity = batteryInfo.nominalChargeCapacity,
+        if let fullChargeCapacity = batteryInfo.fullChargeCapacityMAh,
            let designCapacity = batteryInfo.designCapacity,
-           nominalChargeCapacity > 0,
+           fullChargeCapacity > 0,
            designCapacity > 0 {
-            let raw = (Double(nominalChargeCapacity) / Double(designCapacity)) * 100.0
+            let raw = (Double(fullChargeCapacity) / Double(designCapacity)) * 100.0
             return clampBatteryHealthPercent(raw)
         }
 
@@ -706,8 +796,13 @@ final class MacPowerDataProvider: PowerDataProvider {
         detailLevel: PowerSnapshotDetailLevel
     ) -> SMCReadHints {
         let resolvedFormat = resolvedStatusBarFormat(from: settings)
-        let needsScreen = settings.statusBarItem == .screen || resolvedFormat.contains("{screen}")
-        let needsHeatpipe = settings.statusBarItem == .heatpipe || resolvedFormat.contains("{heatpipe}")
+        let needsAttributionPower = settings.showAppEnergyOffenders
+        let needsScreen = needsAttributionPower
+            || settings.statusBarItem == .screen
+            || resolvedFormat.contains("{screen}")
+        let needsHeatpipe = needsAttributionPower
+            || settings.statusBarItem == .heatpipe
+            || resolvedFormat.contains("{heatpipe}")
         let needsTempToken = resolvedFormat.contains("{temp}")
         let cachedAge = cachedCpuTemperatureAge()
         let needsTempRefresh = cachedAge == nil || (cachedAge ?? 0) > Self.summaryCpuTempRefreshInterval

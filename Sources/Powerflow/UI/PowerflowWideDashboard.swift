@@ -17,8 +17,10 @@ enum PowerflowReportMode: String, CaseIterable, Identifiable {
 }
 
 struct PowerflowWideDashboard: View {
+    @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
     let state: PopoverViewState
     let onReportRangeChange: (PowerReportRange) -> Void
+    let onTabChange: (PowerflowDashboardTab) -> Void
     private let initialReportMode: PowerflowReportMode
 
     @State private var selectedTab: PowerflowDashboardTab
@@ -27,11 +29,13 @@ struct PowerflowWideDashboard: View {
         state: PopoverViewState,
         initialSelectedTab: PowerflowDashboardTab = .live,
         initialReportMode: PowerflowReportMode = .power,
-        onReportRangeChange: @escaping (PowerReportRange) -> Void = { _ in }
+        onReportRangeChange: @escaping (PowerReportRange) -> Void = { _ in },
+        onTabChange: @escaping (PowerflowDashboardTab) -> Void = { _ in }
     ) {
         self.state = state
         self.initialReportMode = initialReportMode
         self.onReportRangeChange = onReportRangeChange
+        self.onTabChange = onTabChange
         _selectedTab = State(initialValue: initialSelectedTab)
     }
 
@@ -52,6 +56,16 @@ struct PowerflowWideDashboard: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
+        }
+        .onAppear {
+            if !snapshotRendering {
+                onTabChange(selectedTab)
+            }
+        }
+        .onChange(of: selectedTab) { _, tab in
+            if !snapshotRendering {
+                onTabChange(tab)
+            }
         }
     }
 
@@ -124,23 +138,42 @@ struct PowerflowWideDashboard: View {
 }
 
 private struct WideLiveDashboard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let state: PopoverViewState
 
     var body: some View {
         VStack(spacing: 8) {
             liveSummary
             SankeyPowerFlowView(state: state.flow)
-                .frame(height: 230)
+                .frame(height: dynamicTypeSize.isAccessibilitySize ? 270 : 230)
             LiveAppImpactCard(
                 rows: state.history.appImpact,
                 isEnabled: state.history.isAppImpactEnabled
             )
-                .frame(height: 68)
+                .frame(height: dynamicTypeSize.isAccessibilitySize ? 96 : 68)
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private var liveSummary: some View {
+    #if compiler(>=6.2)
+        Group {
+            if #available(macOS 26, *) {
+                GlassEffectContainer(spacing: 4) {
+                    liveSummaryContent
+                }
+            } else {
+                liveSummaryContent
+            }
+        }
+        .frame(height: dynamicTypeSize.isAccessibilitySize ? 72 : 50)
+    #else
+        liveSummaryContent
+            .frame(height: dynamicTypeSize.isAccessibilitySize ? 72 : 50)
+    #endif
+    }
+
+    private var liveSummaryContent: some View {
         HStack(spacing: 0) {
             CompactLiveMetric(
                 title: "System load",
@@ -182,7 +215,6 @@ private struct WideLiveDashboard: View {
                 SystemInspector(snapshot: snapshot)
             }
         }
-        .frame(height: 50)
     }
 
     private var snapshot: PowerSnapshot { state.flow.snapshot }
@@ -256,7 +288,7 @@ private struct SankeyPowerFlowView: View {
             }
             .padding(7)
         }
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Live power flow")
         .accessibilityValue(accessibilityValue)
     }
@@ -602,6 +634,7 @@ private struct SankeyCanvas: View {
                 )
             }
         }
+        .accessibilityHidden(true)
     }
 
     private func ribbonPath(from start: CGPoint, to end: CGPoint, thickness: CGFloat) -> Path {
@@ -816,11 +849,14 @@ private struct DashboardSurface<Content: View>: View {
 }
 
 private struct WideReportsDashboard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let state: PowerReportState
     let onRangeChange: (PowerReportRange) -> Void
 
     @State private var mode: PowerflowReportMode
     @State private var batteryMetric = BatteryReportMetric.health
+    @State private var selectedPowerDate: Date?
+    @State private var selectedBatteryDate: Date?
 
     private enum BatteryReportMetric: String, CaseIterable, Identifiable {
         case health = "Health"
@@ -922,7 +958,11 @@ private struct WideReportsDashboard: View {
                 }
 
                 reportSummary
-                    .frame(height: mode == .power ? 86 : 112)
+                    .frame(
+                        height: dynamicTypeSize.isAccessibilitySize
+                            ? (mode == .power ? 128 : 168)
+                            : (mode == .power ? 86 : 112)
+                    )
             }
         }
     }
@@ -936,30 +976,41 @@ private struct WideReportsDashboard: View {
                 reportLegend
             }
 
-            Chart(state.points) { point in
-                LineMark(
-                    x: .value("Time", point.timestamp),
-                    y: .value("System", point.systemLoad),
-                    series: .value("Series", "System")
-                )
-                .foregroundStyle(Color(nsColor: .systemGreen))
-                .lineStyle(StrokeStyle(lineWidth: 2))
+            Chart {
+                ForEach(state.points) { point in
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("System", point.systemLoad),
+                        series: .value("Series", "System")
+                    )
+                    .foregroundStyle(Color(nsColor: .systemGreen))
+                    .lineStyle(StrokeStyle(lineWidth: 2))
 
-                LineMark(
-                    x: .value("Time", point.timestamp),
-                    y: .value("Adapter", point.adapterInput),
-                    series: .value("Series", "Adapter")
-                )
-                .foregroundStyle(Color(nsColor: .systemBlue))
-                .lineStyle(StrokeStyle(lineWidth: 1.5))
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Adapter", point.adapterInput),
+                        series: .value("Series", "Adapter")
+                    )
+                    .foregroundStyle(Color(nsColor: .systemBlue))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [8, 3]))
 
-                LineMark(
-                    x: .value("Time", point.timestamp),
-                    y: .value("Battery", point.batteryPower),
-                    series: .value("Series", "Battery")
-                )
-                .foregroundStyle(Color(nsColor: .systemIndigo))
-                .lineStyle(StrokeStyle(lineWidth: 1.3, dash: [4, 3]))
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Battery", point.batteryPower),
+                        series: .value("Series", "Battery")
+                    )
+                    .foregroundStyle(Color(nsColor: .systemIndigo))
+                    .lineStyle(StrokeStyle(lineWidth: 1.3, dash: [2, 3]))
+                }
+
+                if let selectedPowerPoint {
+                    RuleMark(x: .value("Selected time", selectedPowerPoint.timestamp))
+                        .foregroundStyle(.secondary.opacity(0.5))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                        .annotation(position: .top, spacing: 4) {
+                            powerSelectionCard(selectedPowerPoint)
+                        }
+                }
             }
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 3)) { value in
@@ -982,6 +1033,21 @@ private struct WideReportsDashboard: View {
                     }
                 }
             }
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            updatePowerSelection(phase, proxy: proxy, geometry: geometry)
+                        }
+                }
+            }
+            .focusable()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Observed power chart")
+            .accessibilityValue(powerSelectionAccessibilityValue)
+            .accessibilityAdjustableAction(movePowerSelection)
             .frame(maxHeight: .infinity)
 
             Text("Energy totals cover only minutes recorded while Powerflow was running.")
@@ -992,15 +1058,20 @@ private struct WideReportsDashboard: View {
 
     private var reportLegend: some View {
         HStack(spacing: 10) {
-            legendItem("System", Color(nsColor: .systemGreen))
-            legendItem("Adapter", Color(nsColor: .systemBlue))
-            legendItem("Battery ±", Color(nsColor: .systemIndigo))
+            legendItem("System", Color(nsColor: .systemGreen), dash: [])
+            legendItem("Adapter", Color(nsColor: .systemBlue), dash: [8, 3])
+            legendItem("Battery ±", Color(nsColor: .systemIndigo), dash: [2, 3])
         }
     }
 
-    private func legendItem(_ label: String, _ color: Color) -> some View {
+    private func legendItem(_ label: String, _ color: Color, dash: [CGFloat]) -> some View {
         HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 6, height: 6)
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: 3))
+                path.addLine(to: CGPoint(x: 12, y: 3))
+            }
+            .stroke(color, style: StrokeStyle(lineWidth: 1.5, dash: dash))
+            .frame(width: 12, height: 6)
             Text(label).font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -1031,26 +1102,37 @@ private struct WideReportsDashboard: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Chart(values) { point in
-                    AreaMark(
-                        x: .value("Time", point.timestamp),
-                        yStart: .value("Baseline", point.baseline),
-                        yEnd: .value(batteryMetric.rawValue, point.value)
-                    )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [batteryMetric.tint.opacity(0.24), batteryMetric.tint.opacity(0.02)],
-                            startPoint: .top,
-                            endPoint: .bottom
+                Chart {
+                    ForEach(values) { point in
+                        AreaMark(
+                            x: .value("Time", point.timestamp),
+                            yStart: .value("Baseline", point.baseline),
+                            yEnd: .value(batteryMetric.rawValue, point.value)
                         )
-                    )
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [batteryMetric.tint.opacity(0.24), batteryMetric.tint.opacity(0.02)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
 
-                    LineMark(
-                        x: .value("Time", point.timestamp),
-                        y: .value(batteryMetric.rawValue, point.value)
-                    )
-                    .foregroundStyle(batteryMetric.tint)
-                    .lineStyle(StrokeStyle(lineWidth: 2))
+                        LineMark(
+                            x: .value("Time", point.timestamp),
+                            y: .value(batteryMetric.rawValue, point.value)
+                        )
+                        .foregroundStyle(batteryMetric.tint)
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                    }
+
+                    if let selectedBatteryPoint {
+                        RuleMark(x: .value("Selected time", selectedBatteryPoint.timestamp))
+                            .foregroundStyle(.secondary.opacity(0.5))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                            .annotation(position: .top, spacing: 4) {
+                                batterySelectionCard(selectedBatteryPoint)
+                            }
+                    }
                 }
                 .chartXAxis {
                     AxisMarks(values: .automatic(desiredCount: 3)) { value in
@@ -1073,6 +1155,21 @@ private struct WideReportsDashboard: View {
                         }
                     }
                 }
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        Rectangle()
+                            .fill(.clear)
+                            .contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                updateBatterySelection(phase, proxy: proxy, geometry: geometry)
+                            }
+                    }
+                }
+                .focusable()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(batteryMetric.rawValue) history chart")
+                .accessibilityValue(batterySelectionAccessibilityValue)
+                .accessibilityAdjustableAction(moveBatterySelection)
                 .frame(maxHeight: .infinity)
             }
 
@@ -1145,9 +1242,9 @@ private struct WideReportsDashboard: View {
     private var summaryItems: [(label: String, value: String)] {
         if mode == .power {
             return [
-                ("Average", PowerFormatter.wattsString(state.summary.averageSystemLoad)),
-                ("Peak", PowerFormatter.wattsString(state.summary.peakSystemLoad)),
                 ("Energy", energyText),
+                ("Average", PowerFormatter.wattsString(state.summary.averageSystemLoad)),
+                ("Sampled peak", PowerFormatter.wattsString(state.summary.peakSystemLoad)),
                 ("On adapter", percent(state.summary.externalPowerFraction)),
             ]
         }
@@ -1156,7 +1253,12 @@ private struct WideReportsDashboard: View {
             ("Full charge", state.summary.latestFullChargeMAh.map { String(format: "%.0f mAh", $0) } ?? "--"),
             ("Design", state.summary.latestDesignMAh.map { String(format: "%.0f mAh", $0) } ?? "--"),
             ("Cycles", state.summary.latestCycleCount.map(String.init) ?? "--"),
-            ("Cycle change", state.summary.cycleCountChange.map { "+\($0)" } ?? "--"),
+            (
+                "Cycle change",
+                state.summary.cycleCountResetDetected
+                    ? "Reset detected"
+                    : state.summary.cycleCountChange.map { "+\($0)" } ?? "--"
+            ),
             ("Peak temp", state.summary.peakTemperatureC.map { String(format: "%.1f °C", $0) } ?? "--"),
         ]
     }
@@ -1185,10 +1287,129 @@ private struct WideReportsDashboard: View {
         String(format: "%.0f%%", fraction * 100)
     }
 
+    private var selectedPowerPoint: PowerReportPoint? {
+        nearestPoint(to: selectedPowerDate, in: state.points, date: \.timestamp)
+    }
+
+    private var selectedBatteryPoint: BatteryPlotPoint? {
+        nearestPoint(to: selectedBatteryDate, in: batteryPlotPoints, date: \.timestamp)
+    }
+
+    private func updatePowerSelection(
+        _ phase: HoverPhase,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        selectedPowerDate = hoverDate(for: phase, proxy: proxy, geometry: geometry)
+    }
+
+    private func updateBatterySelection(
+        _ phase: HoverPhase,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        selectedBatteryDate = hoverDate(for: phase, proxy: proxy, geometry: geometry)
+    }
+
+    private func hoverDate(
+        for phase: HoverPhase,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) -> Date? {
+        guard case let .active(location) = phase,
+              let plotFrame = proxy.plotFrame else { return nil }
+        let frame = geometry[plotFrame]
+        guard frame.contains(location) else { return nil }
+        return proxy.value(atX: location.x - frame.minX)
+    }
+
+    private func movePowerSelection(_ direction: AccessibilityAdjustmentDirection) {
+        selectedPowerDate = adjustedDate(
+            current: selectedPowerDate,
+            dates: state.points.map(\.timestamp),
+            direction: direction
+        )
+    }
+
+    private func moveBatterySelection(_ direction: AccessibilityAdjustmentDirection) {
+        selectedBatteryDate = adjustedDate(
+            current: selectedBatteryDate,
+            dates: batteryPlotPoints.map(\.timestamp),
+            direction: direction
+        )
+    }
+
+    private func adjustedDate(
+        current: Date?,
+        dates: [Date],
+        direction: AccessibilityAdjustmentDirection
+    ) -> Date? {
+        guard !dates.isEmpty else { return nil }
+        let currentIndex = current.flatMap { date in
+            dates.indices.min { abs(dates[$0].timeIntervalSince(date)) < abs(dates[$1].timeIntervalSince(date)) }
+        } ?? (direction == .decrement ? dates.count : -1)
+        switch direction {
+        case .increment:
+            return dates[min(currentIndex + 1, dates.count - 1)]
+        case .decrement:
+            return dates[max(currentIndex - 1, 0)]
+        @unknown default:
+            return current
+        }
+    }
+
+    private func nearestPoint<Value>(
+        to date: Date?,
+        in values: [Value],
+        date datePath: KeyPath<Value, Date>
+    ) -> Value? {
+        guard let date else { return nil }
+        return values.min {
+            abs($0[keyPath: datePath].timeIntervalSince(date))
+                < abs($1[keyPath: datePath].timeIntervalSince(date))
+        }
+    }
+
+    private func powerSelectionCard(_ point: PowerReportPoint) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(point.timestamp, format: .dateTime.hour().minute())
+            Text("System \(PowerFormatter.wattsString(point.systemLoad))")
+            Text("Adapter \(PowerFormatter.wattsString(point.adapterInput))")
+            Text("Battery \(PowerFormatter.wattsString(point.batteryPower))")
+        }
+        .font(.caption2.monospacedDigit())
+        .padding(5)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+
+    private func batterySelectionCard(_ point: BatteryPlotPoint) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(point.timestamp, format: .dateTime.hour().minute())
+            Text(batteryMetric.format(point.value))
+        }
+        .font(.caption2.monospacedDigit())
+        .padding(5)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+
+    private var powerSelectionAccessibilityValue: String {
+        guard let point = selectedPowerPoint else {
+            return "Use VoiceOver increment or decrement to inspect recorded points."
+        }
+        return "\(point.timestamp.formatted()), system \(PowerFormatter.wattsString(point.systemLoad)), adapter \(PowerFormatter.wattsString(point.adapterInput)), battery \(PowerFormatter.wattsString(point.batteryPower))"
+    }
+
+    private var batterySelectionAccessibilityValue: String {
+        guard let point = selectedBatteryPoint else {
+            return "Use VoiceOver increment or decrement to inspect recorded points."
+        }
+        return "\(point.timestamp.formatted()), \(batteryMetric.format(point.value))"
+    }
+
     private var rangeBinding: Binding<PowerReportRange> {
         Binding(
             get: { state.range },
-            set: onRangeChange
+            set: { range in onRangeChange(range) }
         )
     }
 }

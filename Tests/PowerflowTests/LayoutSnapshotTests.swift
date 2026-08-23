@@ -399,7 +399,8 @@ private enum LayoutSnapshotFixtures {
                 latestFullChargeMAh: 5_560,
                 latestDesignMAh: 6_249,
                 latestCycleCount: 173,
-                cycleCountChange: 2
+                cycleCountChange: 2,
+                cycleCountResetDetected: false
             ),
             isLoading: false,
             errorMessage: nil
