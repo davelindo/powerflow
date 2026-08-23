@@ -160,6 +160,7 @@ final class SMCReader {
     private var preferredBatteryPercentKey: String?
     private var preferredCapacityKey: String?
     private var cachedCpuTempKeys: [String] = []
+    private var cachedSummaryFanReadings: [SMCFanReading]?
     private var didScanCpuTempKeys = false
     private let cpuTempScanCooldown = PowerflowConstants.cpuTempScanCooldown
     private var lastCpuTempScanFailure: Date?
@@ -254,9 +255,18 @@ final class SMCReader {
             }
         }
 
-        data.fanReadings = readFanReadings(connection, includeDetails: false)
+        data.fanReadings = summaryFanReadings(connection)
 
         return data
+    }
+
+    private func summaryFanReadings(_ connection: SMCConnection) -> [SMCFanReading] {
+        if let cachedSummaryFanReadings {
+            return cachedSummaryFanReadings
+        }
+        let readings = readFanReadings(connection, includeDetails: false)
+        cachedSummaryFanReadings = readings
+        return readings
     }
 
     private func readFullPowerData(_ connection: SMCConnection) -> SMCPowerData {
@@ -416,8 +426,8 @@ final class SMCReader {
         return nil
     }
 
-    private func readFanReadings(
-        _ connection: SMCConnection,
+    func readFanReadings(
+        _ connection: FanKeyReading,
         includeDetails: Bool
     ) -> [SMCFanReading] {
         let countValue = connection.readKey("FNum")?.floatValue() ?? 0
@@ -540,3 +550,9 @@ final class SMCReader {
         return newConnection
     }
 }
+
+protocol FanKeyReading {
+    func readKey(_ key: String) -> SMCValue?
+}
+
+extension SMCConnection: FanKeyReading {}

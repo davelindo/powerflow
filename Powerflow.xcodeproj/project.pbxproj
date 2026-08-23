@@ -28,6 +28,7 @@
 		61022F73CBABB13D7DA61248 /* popover-settings-dark.png in Resources */ = {isa = PBXBuildFile; fileRef = 728B2BC628144E6ED30685E2 /* popover-settings-dark.png */; };
 		62C4C562B586D9F2281BC091 /* SystemEnergyCounterCalibratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4D620B40CA33664E84C8B25 /* SystemEnergyCounterCalibratorTests.swift */; };
 		69974563DE3F19796E4B50EF /* StatusPopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8BE22D71D715A514FF8741B /* StatusPopoverView.swift */; };
+		74043984F1C82E85E26A1AB0 /* SMCReaderFanCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9724A3DFEBAB9FB6D3D8623C /* SMCReaderFanCacheTests.swift */; };
 		759EB6CA1F62C125D5860916 /* BoundedProcessRunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD638F6662DDB91D15E1F193 /* BoundedProcessRunnerTests.swift */; };
 		7FDFCE002F9295BF8CC1E944 /* PowerHistoryRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD23416EC2E026D472E3D143 /* PowerHistoryRepositoryTests.swift */; };
 		84E957D7135647DD45EFE6CB /* history-section-light.png in Resources */ = {isa = PBXBuildFile; fileRef = DC12702A2522B5C81737EC62 /* history-section-light.png */; };
@@ -111,6 +112,7 @@
 		8F9044A7105CB7C524C06031 /* LayoutSnapshotConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutSnapshotConfiguration.swift; sourceTree = "<group>"; };
 		9627FC193E178673CB01BFA3 /* PowerflowConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerflowConstants.swift; sourceTree = "<group>"; };
 		969E5AAE912DF205C322B852 /* SettingsSupportViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSupportViews.swift; sourceTree = "<group>"; };
+		9724A3DFEBAB9FB6D3D8623C /* SMCReaderFanCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMCReaderFanCacheTests.swift; sourceTree = "<group>"; };
 		98B94A6C030B28BE1D0A62C9 /* PowerflowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerflowApp.swift; sourceTree = "<group>"; };
 		99C20DECD7138D6728A4760C /* IORegistryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IORegistryReader.swift; sourceTree = "<group>"; };
 		9A215345F41597D582D06D5E /* popover-devices-dark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "popover-devices-dark.png"; sourceTree = "<group>"; };
@@ -219,6 +221,7 @@
 				B52B3B7A2CA4355779CB87B3 /* PowerSettingsStoreTests.swift */,
 				EEED25C57E49E49CB6181091 /* PowerSettingsTests.swift */,
 				55BA558197CADD8D7D030BD6 /* PowerTelemetryTests.swift */,
+				9724A3DFEBAB9FB6D3D8623C /* SMCReaderFanCacheTests.swift */,
 				9C67483A3FBC2E8A2A296768 /* SMCValueTests.swift */,
 				D4D620B40CA33664E84C8B25 /* SystemEnergyCounterCalibratorTests.swift */,
 				DF7A6B4F10D8855281A17DD0 /* __Snapshots__ */,
@@ -460,6 +463,7 @@
 				FDBC491BE5AF38936C9B9B68 /* PowerSettingsStoreTests.swift in Sources */,
 				02168B193FFD6F3B4EB3092C /* PowerSettingsTests.swift in Sources */,
 				195E4D897D9621D16B139B6C /* PowerTelemetryTests.swift in Sources */,
+				74043984F1C82E85E26A1AB0 /* SMCReaderFanCacheTests.swift in Sources */,
 				9208A9F393BA2BFD3AC9B7B8 /* SMCValueTests.swift in Sources */,
 				62C4C562B586D9F2281BC091 /* SystemEnergyCounterCalibratorTests.swift in Sources */,
 			);
