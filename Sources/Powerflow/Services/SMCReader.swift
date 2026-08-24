@@ -136,7 +136,7 @@ final class SMCReader {
     private let batteryPercentKeys = ["SBAS", "BRSC"]
     private let batteryCapacityKeys = ["SBAR", "B0RM"]
     // Deduplicated CPU temperature keys - discovered dynamically and cached
-    private let cpuTempKeys: [String] = Array(Set([
+    private let cpuTempKeys: [String] = [
         "Tp09", "Tp0T", "Tp01", "Tp05", "Tp0D", "Tp0H", "Tp0L", "Tp0P", "Tp0X", "Tp0b",
         "Tg05", "Tg0D", "Tg0L", "Tg0T",
         "TC10", "TC11", "TC12", "TC13",
@@ -152,9 +152,9 @@ final class SMCReader {
         "Tf04", "Tf09", "Tf0A", "Tf0B", "Tf0D", "Tf0E",
         "Tf44", "Tf49", "Tf4A", "Tf4B", "Tf4D", "Tf4E",
         "Tf14", "Tf18", "Tf19", "Tf1A", "Tf24", "Tf28", "Tf29", "Tf2A",
-    ]))
+    ]
 
-    private var connection: SMCConnection?
+    private var connection: FanKeyReading?
     private var preferredHeatpipeKey: String?
     private var preferredBatteryVoltageKey: String?
     private var preferredBatteryPercentKey: String?
@@ -163,6 +163,7 @@ final class SMCReader {
     private var cachedSummaryFanReadings: [SMCFanReading]?
     private var cachedFanCount: Int?
     private var cachedFanDetails: [Int: FanStaticDetails] = [:]
+    private var cachedCpuTemperature: CPUTemperatureSample?
     private var didScanCpuTempKeys = false
     private let cpuTempScanCooldown = PowerflowConstants.cpuTempScanCooldown
     private var lastCpuTempScanFailure: Date?
@@ -174,21 +175,36 @@ final class SMCReader {
         }
     }
 
+    init(cachedCpuTempKeys: [String], keyReader: FanKeyReading) {
+        if !cachedCpuTempKeys.isEmpty {
+            self.cachedCpuTempKeys = cachedCpuTempKeys
+            self.didScanCpuTempKeys = true
+        }
+        self.connection = keyReader
+    }
+
     var cpuTemperatureKeysCache: [String] {
         cachedCpuTempKeys
     }
 
+    func resetCachedCPUTemperature() {
+        cachedCpuTemperature = nil
+    }
+
     func readPowerData(detailLevel: PowerSnapshotDetailLevel, hints: SMCReadHints) -> SMCPowerData {
-        guard let connection = getConnection() else { return .empty }
+        guard let smcConnection = getConnection() else { return .empty }
         switch detailLevel {
         case .summary:
-            return readSummaryPowerData(connection, hints: hints)
+            return readSummaryPowerData(smcConnection, hints: hints)
         case .full:
-            return readFullPowerData(connection)
+            return readFullPowerData(smcConnection)
         }
     }
 
-    private func readSummaryPowerData(_ connection: SMCConnection, hints: SMCReadHints) -> SMCPowerData {
+    private func readSummaryPowerData(
+        _ connection: FanKeyReading,
+        hints: SMCReadHints
+    ) -> SMCPowerData {
         var data = SMCPowerData.empty
 
         if let value = connection.readKey("PPBR")?.floatValue() {
@@ -246,14 +262,24 @@ final class SMCReader {
         }
 
         if hints.needsTemperature {
-            if let value = connection.readKey("TB0T")?.floatValue() {
+            let now = Date()
+            let canUseTemperatureCache = !shouldRefreshCachedCPUTemperature(now: now)
+                && cachedCpuTemperature != nil
+            if !canUseTemperatureCache,
+               let value = connection.readKey("TB0T")?.floatValue() {
                 data.temperature = value
                 data.hasTemperature = true
             }
-            if let cpuTemp = readCPUTemperature(connection, allowScan: false) {
+            let shouldRefresh = shouldRefreshCachedCPUTemperature(now: now)
+            if !shouldRefresh, let cached = cachedCpuTemperature {
+                data.cpuTemperature = cached.value
+                data.cpuTemperatureKey = cached.key
+                data.hasCpuTemperature = true
+            } else if let cpuTemp = readCPUTemperature(connection, allowScan: true) {
                 data.cpuTemperature = cpuTemp.value
                 data.cpuTemperatureKey = cpuTemp.key
                 data.hasCpuTemperature = true
+                storeCPUTemperature(cpuTemp, now: now)
             }
         }
 
@@ -262,7 +288,7 @@ final class SMCReader {
         return data
     }
 
-    private func summaryFanReadings(_ connection: SMCConnection) -> [SMCFanReading] {
+    private func summaryFanReadings(_ connection: FanKeyReading) -> [SMCFanReading] {
         if let cachedSummaryFanReadings {
             return cachedSummaryFanReadings
         }
@@ -278,7 +304,7 @@ final class SMCReader {
         let modeRaw: Int?
     }
 
-    private func readFullPowerData(_ connection: SMCConnection) -> SMCPowerData {
+    private func readFullPowerData(_ connection: FanKeyReading) -> SMCPowerData {
         var data = SMCPowerData.empty
 
         if let value = connection.readKey("PPBR")?.floatValue() {
@@ -404,17 +430,45 @@ final class SMCReader {
 
         data.platformName = connection.readKey("RPlt")?.stringValue()
         data.fanReadings = readFanReadings(connection, includeDetails: true)
-        if let cpuTemp = readCPUTemperature(connection, allowScan: true) {
+        let shouldRefresh = shouldRefreshCachedCPUTemperature(now: Date())
+        if !shouldRefresh, let cached = cachedCpuTemperature {
+            data.cpuTemperature = cached.value
+            data.cpuTemperatureKey = cached.key
+            data.hasCpuTemperature = true
+        } else if let cpuTemp = readCPUTemperature(connection, allowScan: true) {
             data.cpuTemperature = cpuTemp.value
             data.cpuTemperatureKey = cpuTemp.key
             data.hasCpuTemperature = true
+            storeCPUTemperature(cpuTemp, now: Date())
         }
 
         return data
     }
 
+    private struct CPUTemperatureSample {
+        let value: Double
+        let key: String?
+        let timestamp: Date
+    }
+
+    private static let cpuTemperatureCacheInterval = PowerflowConstants.fullCpuTempRefreshInterval
+
+    private func shouldRefreshCachedCPUTemperature(now: Date) -> Bool {
+        guard let cachedCpuTemperature else { return true }
+        return now.timeIntervalSince(cachedCpuTemperature.timestamp) >= Self.cpuTemperatureCacheInterval
+    }
+
+    private func storeCPUTemperature(_ sample: (value: Double, key: String)?, now: Date) {
+        guard let sample else { return }
+        cachedCpuTemperature = CPUTemperatureSample(
+            value: sample.value,
+            key: sample.key,
+            timestamp: now
+        )
+    }
+
     private func readPreferredValue(
-        _ connection: SMCConnection,
+        _ connection: FanKeyReading,
         preferredKey: inout String?,
         candidates: [String],
         requirePositive: Bool
@@ -553,7 +607,7 @@ final class SMCReader {
     }
 
     private func readCPUTemperature(
-        _ connection: SMCConnection,
+        _ connection: FanKeyReading,
         allowScan: Bool
     ) -> (value: Double, key: String)? {
         let now = Date()
@@ -611,7 +665,7 @@ final class SMCReader {
         return maxTemp > 0 ? (maxTemp, maxKey) : nil
     }
 
-    private func getConnection() -> SMCConnection? {
+    private func getConnection() -> FanKeyReading? {
         if let connection = connection {
             return connection
         }
