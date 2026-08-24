@@ -260,7 +260,7 @@ private enum LayoutSnapshotFixtures {
                 groupID: "com.apple.dt.Xcode",
                 primaryPID: 5120,
                 name: "Xcode",
-                iconPath: "/Applications/Xcode.app",
+                iconPath: nil,
                 processCount: 1,
                 impactScore: 8.6,
                 cpuPercent: 6.3,
