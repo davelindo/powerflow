@@ -40,6 +40,9 @@ struct StatusPopoverView: View {
         .frame(width: 420, height: 460)
         .modifier(SnapshotShellModifier(enabled: snapshotRendering))
         .animation(.spring(response: 0.28, dampingFraction: 0.9), value: showingSettings)
+        .onAppear { appState.setSettingsVisible(showingSettings) }
+        .onChange(of: showingSettings) { _, visible in appState.setSettingsVisible(visible) }
+        .onDisappear { appState.setSettingsVisible(false) }
     }
 
     private var popoverContent: some View {

@@ -108,6 +108,7 @@ struct PowerReportState: Equatable, Sendable {
 }
 
 struct PowerHistoryObservation: Sendable {
+    let hasValidSystemPower: Bool
     let timestamp: Date
     let monotonicUptime: TimeInterval
     let systemEnergyDeltaWh: Double?
@@ -127,6 +128,7 @@ struct PowerHistoryObservation: Sendable {
     let cycleCount: Int?
 
     init(snapshot: PowerSnapshot) {
+        hasValidSystemPower = Self.hasValidSystemPower(snapshot)
         timestamp = snapshot.timestamp
         monotonicUptime = snapshot.monotonicUptime
         systemEnergyDeltaWh = snapshot.systemEnergyDeltaWh.flatMap { value in
@@ -155,6 +157,14 @@ struct PowerHistoryObservation: Sendable {
         cycleCount = snapshot.batteryDetails?.cycleCount ?? snapshot.batteryCycleCountSMC
     }
 
+    private static func hasValidSystemPower(_ snapshot: PowerSnapshot) -> Bool {
+        guard MacPowerDataProvider.validatedPower(snapshot.systemLoad) != nil else {
+            return false
+        }
+        return snapshot.diagnostics.smc.hasSystemTotal
+            || MacPowerDataProvider.validatedPower(snapshot.diagnostics.telemetry?.systemLoadWatts) != nil
+    }
+
     private static func nonnegativePower(_ value: Double) -> Double {
         guard value.isFinite else { return 0 }
         return max(value, 0)
@@ -166,7 +176,7 @@ struct PowerHistoryObservation: Sendable {
     }
 
     private static func validTemperature(_ value: Double) -> Double? {
-        guard value.isFinite,
+        guard value.isFinite, value > 0,
               (PowerflowConstants.minValidTemperature...PowerflowConstants.maxValidCpuTemperature)
                 .contains(value) else { return nil }
         return value

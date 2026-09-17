@@ -248,6 +248,9 @@ final class SMCReader {
             data.brightness = value
             data.hasBrightness = true
         }
+        if hints.needsScreenPower, let value = connection.readKey("MSLD")?.floatValue() {
+            data.lidClosed = value > 0.5
+        }
 
         if hints.needsHeatpipePower,
            let heatpipe = readPreferredValue(
@@ -514,8 +517,7 @@ final class SMCReader {
                     maxRpm: maxRpm,
                     minRpm: minRpm,
                     targetRpm: targetRpm,
-                    modeRaw: modeRaw,
-                    includeDetails: true
+                    modeRaw: modeRaw
                 ))
             } else {
                 readings.append(Self.fanReading(
@@ -524,8 +526,7 @@ final class SMCReader {
                     maxRpm: maxRpm,
                     minRpm: nil,
                     targetRpm: nil,
-                    modeRaw: nil,
-                    includeDetails: false
+                    modeRaw: nil
                 ))
             }
         }
@@ -553,16 +554,11 @@ final class SMCReader {
         maxRpm: Double?,
         minRpm: Double?,
         targetRpm: Double?,
-        modeRaw: Int?,
-        includeDetails: Bool
+        modeRaw: Int?
     ) -> SMCFanReading {
         var percentMax: Double?
         if let maxRpm, maxRpm > 0 {
-            if includeDetails, let minRpm, minRpm > 0, maxRpm > minRpm {
-                percentMax = min(100, max(0, (rpm - minRpm) / (maxRpm - minRpm) * 100))
-            } else {
-                percentMax = min(100, (rpm / maxRpm) * 100)
-            }
+            percentMax = min(100, max(0, (rpm / maxRpm) * 100))
         }
         return SMCFanReading(
             index: index,

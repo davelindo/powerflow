@@ -4,6 +4,55 @@ import XCTest
 @testable import Powerflow
 
 final class PowerHistoryRepositoryTests: XCTestCase {
+    @MainActor
+    func testDisplayRejectionDoesNotDiscardCounterEnergy() async throws {
+        let fixture = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let state = AppState.snapshotTesting(settings: .default, snapshot: .empty, history: [], repository: fixture.repository)
+        var sample = PowerSnapshot.empty
+        sample.timestamp = base
+        sample.monotonicUptime = 100
+        sample.systemLoad = 20
+        sample.systemIn = 20
+        sample.diagnostics.smc.hasSystemTotal = true
+        state.apply(sample)
+        sample.timestamp = base.addingTimeInterval(5)
+        sample.monotonicUptime = 105
+        sample.systemEnergyDeltaWh = 0.1
+        sample.batteryPower = 50 // deliberately rejected by display smoothing
+        state.apply(sample)
+        XCTAssertEqual(state.snapshot.timestamp, base)
+        sample.timestamp = base.addingTimeInterval(10)
+        sample.monotonicUptime = 110
+        sample.batteryPower = 0
+        state.apply(sample)
+        await state.shutdown()
+        let reopened = try PowerHistoryRepository(databaseURL: fixture.directory.appendingPathComponent("history.sqlite3"))
+        let report = try await reopened.report(range: .hour, endingAt: base.addingTimeInterval(15))
+        XCTAssertEqual(report.summary.observedEnergyWh, 0.2, accuracy: 0.000001)
+        XCTAssertEqual(report.summary.coverageFraction, 10.0 / 3600, accuracy: 0.000001)
+        try await reopened.close()
+    }
+
+    func testUnavailablePowerBreaksCoverageButMeasuredZeroIsValid() async throws {
+        let fixture = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        for index in 0..<5 {
+            var sample = PowerSnapshot.empty
+            sample.timestamp = base.addingTimeInterval(Double(index * 5))
+            sample.monotonicUptime = 100 + Double(index * 5)
+            sample.diagnostics.smc.hasSystemTotal = index != 2
+            try await fixture.repository.record(observation: PowerHistoryObservation(snapshot: sample))
+        }
+        let report = try await fixture.repository.report(range: .hour, endingAt: base.addingTimeInterval(25))
+        XCTAssertEqual(report.summary.coverageFraction, 10.0 / 3600, accuracy: 0.000001)
+        XCTAssertEqual(report.summary.observedEnergyWh, 0)
+        XCTAssertNil(report.summary.averageTemperatureC)
+        try await fixture.repository.close()
+    }
+
     func testIntegratesElapsedTimeAcrossMinuteBoundaries() async throws {
         let fixture = try makeRepository()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -147,7 +196,9 @@ final class PowerHistoryRepositoryTests: XCTestCase {
         XCTAssertEqual(storedMinuteCount, 1)
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
         XCTAssertTrue(files.contains("history.sqlite3"))
-        XCTAssertFalse(files.contains { $0.contains("corrupt-") })
+        let quarantine = try XCTUnwrap(files.first { $0.hasPrefix("corrupt-") })
+        let preserved = directory.appendingPathComponent(quarantine).appendingPathComponent("history.sqlite3")
+        XCTAssertEqual(try Data(contentsOf: preserved), Data("not a database".utf8))
         try await repository.close()
     }
 
@@ -226,6 +277,7 @@ final class PowerHistoryRepositoryTests: XCTestCase {
         snapshot.monotonicUptime = uptime
         snapshot.systemEnergyDeltaWh = systemEnergyDeltaWh
         snapshot.systemLoad = systemLoad
+        snapshot.diagnostics.smc.hasSystemTotal = true
         snapshot.systemIn = adapterInput
         snapshot.batteryPower = adapterInput - systemLoad
         snapshot.screenPower = 4

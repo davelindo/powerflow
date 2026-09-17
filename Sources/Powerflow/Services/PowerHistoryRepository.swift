@@ -351,6 +351,9 @@ actor PowerHistoryRepository {
     }
 
     private func integrate(previous: PowerHistoryObservation, current: PowerHistoryObservation) {
+        // Missing power is not zero power. Keeping the invalid observation as
+        // the next baseline prevents interpolation across sensor outages.
+        guard previous.hasValidSystemPower, current.hasValidSystemPower else { return }
         let wallDuration = current.timestamp.timeIntervalSince(previous.timestamp)
         let monotonicDuration: TimeInterval
         if previous.monotonicUptime > 0, current.monotonicUptime > 0 {
@@ -756,7 +759,7 @@ actor PowerHistoryRepository {
         do {
             return try openConfiguredDatabase(at: url)
         } catch let error as RepositoryError where error.isCorruption {
-            try removeDatabaseFiles(at: url)
+            try quarantineDatabaseFiles(at: url)
             return try createFreshDatabase(at: url)
         }
     }
@@ -826,6 +829,18 @@ actor PowerHistoryRepository {
         let fileManager = FileManager.default
         for path in [url.path, url.path + "-wal", url.path + "-shm"] where fileManager.fileExists(atPath: path) {
             try fileManager.removeItem(atPath: path)
+        }
+    }
+
+    private static func quarantineDatabaseFiles(at url: URL) throws {
+        let directory = url.deletingLastPathComponent()
+            .appendingPathComponent("corrupt-\(UUID().uuidString)", isDirectory: true)
+        let manager = FileManager.default
+        try manager.createDirectory(at: directory, withIntermediateDirectories: false)
+        for suffix in ["", "-wal", "-shm"] {
+            let source = URL(fileURLWithPath: url.path + suffix)
+            guard manager.fileExists(atPath: source.path) else { continue }
+            try manager.moveItem(at: source, to: directory.appendingPathComponent(source.lastPathComponent))
         }
     }
 

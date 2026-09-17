@@ -2,6 +2,20 @@ import XCTest
 @testable import Powerflow
 
 final class SMCReaderFanCacheTests: XCTestCase {
+    func testFanPercentageDoesNotChangeWithDetailLevel() throws {
+        let connection = FanKeyRecorder(keys: [
+            "FNum": .count(1),
+            "F0Ac": .rpm(1_800),
+            "F0Mn": .rpm(1_200),
+            "F0Mx": .rpm(4_000),
+        ])
+        let reader = SMCReader(cachedCpuTempKeys: [], keyReader: connection)
+        let summary = try XCTUnwrap(reader.readFanReadings(connection, includeDetails: false).first?.percentMax)
+        let full = try XCTUnwrap(reader.readFanReadings(connection, includeDetails: true).first?.percentMax)
+        XCTAssertEqual(summary, 45, accuracy: 0.001)
+        XCTAssertEqual(full, summary, accuracy: 0.001)
+    }
+
     func testSummaryFanReadingsKeepLiveRPMWhileCachingStableMetadata() {
         let connection = FanKeyRecorder(keys: [
             "FNum": .count(2),

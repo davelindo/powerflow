@@ -615,6 +615,13 @@ struct SettingsView: View {
                     .help("Integrates measured compute power and allocates energy from local CPU and paging activity. No process activity leaves this Mac.")
                     .accessibilityHint("Tracks estimated application energy locally. Turn off to stop sampling and delete the private ten-minute restart cache.")
                     .padding(.vertical, 10)
+
+                if let error = appState.storageError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
             }
         }
     }

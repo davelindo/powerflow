@@ -41,7 +41,6 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
     private var isRefreshingProfilerBatteryHealth = false
     private var lastComputePowerSample: (uptime: TimeInterval, watts: Double)?
     private var lastComputeEnergySource: PowerEnergySource?
-    private var lastDisplayPowerSample: (uptime: TimeInterval, watts: Double)?
     private var pendingComputeEnergyWh = 0.0
     private var pendingComputeDuration = 0.0
     private var systemEnergyCounterCalibrator = SystemEnergyCounterCalibrator()
@@ -180,10 +179,6 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
             systemLoadWatts: systemLoad,
             uptime: sampleUptime
         )
-        let displayEnergyWh = integratedDisplayEnergyWh(
-            watts: screenPowerAvailable ? screenPower : 0,
-            uptime: sampleUptime
-        )
         let appEnergyOffenders: [AppEnergyOffender]
         var appEnergySampleDurationSeconds: TimeInterval?
         var appEnergyTotalBudgetWh: Double?
@@ -193,23 +188,13 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
                 screenPower: screenPowerAvailable ? screenPower : nil,
                 packagePower: smc.hasHeatpipe ? heatpipePower : nil
             )
-            let source: PowerEnergySource
-            let directComputeEnergyWh: Double?
-            if let counterSystemEnergyWh {
-                source = .validatedSystemCounter
-                directComputeEnergyWh = max(counterSystemEnergyWh - (displayEnergyWh ?? 0), 0)
-            } else if smc.hasHeatpipe {
-                source = .packagePower
-                directComputeEnergyWh = nil
-            } else {
-                source = .systemMinusDisplay
-                directComputeEnergyWh = nil
-            }
+            // The system counter measures a different boundary from package
+            // power. Use it for system history, never to replace package energy.
+            let source = Self.appEnergySource(hasPackagePower: smc.hasHeatpipe)
             recordComputePower(
                 watts: computePowerBudget,
                 uptime: sampleUptime,
-                source: source,
-                directEnergyWh: directComputeEnergyWh
+                source: source
             )
             let activity = appEnergyMonitor.sample(
                 detailLevel: detailLevel,
@@ -326,6 +311,10 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
         } ?? fallbackComputePower
     }
 
+    static func appEnergySource(hasPackagePower: Bool) -> PowerEnergySource {
+        hasPackagePower ? .packagePower : .systemMinusDisplay
+    }
+
     static func integratedEnergyWh(
         previousWatts: Double,
         currentWatts: Double,
@@ -412,8 +401,7 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
     private func recordComputePower(
         watts: Double,
         uptime: TimeInterval,
-        source: PowerEnergySource,
-        directEnergyWh: Double?
+        source: PowerEnergySource
     ) {
         defer {
             lastComputePowerSample = (uptime: uptime, watts: watts)
@@ -424,22 +412,21 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
               source == lastComputeEnergySource else {
             pendingComputeEnergyWh = 0
             pendingComputeDuration = 0
+            appEnergyMonitor.reset()
             return
         }
         let duration = uptime - previous.uptime
-        let integrated = Self.integratedEnergyWh(
+        let energy = Self.integratedEnergyWh(
             previousWatts: previous.watts,
             currentWatts: watts,
             duration: duration
         )
-        let energy = directEnergyWh.flatMap { value in
-            value.isFinite && value >= 0 ? value : nil
-        } ?? integrated
         guard let energy,
               duration > 0,
               duration <= PowerflowConstants.maxAppEnergyIntegrationInterval else {
             pendingComputeEnergyWh = 0
             pendingComputeDuration = 0
+            appEnergyMonitor.reset()
             return
         }
         pendingComputeEnergyWh += energy
@@ -451,16 +438,6 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
         lastComputeEnergySource = nil
         pendingComputeEnergyWh = 0
         pendingComputeDuration = 0
-    }
-
-    private func integratedDisplayEnergyWh(watts: Double, uptime: TimeInterval) -> Double? {
-        defer { lastDisplayPowerSample = (uptime, watts) }
-        guard let previous = lastDisplayPowerSample else { return nil }
-        return Self.integratedEnergyWh(
-            previousWatts: previous.watts,
-            currentWatts: watts,
-            duration: uptime - previous.uptime
-        )
     }
 
     private func batteryHealthPercent(smc: SMCPowerData, batteryInfo: BatteryInfo, now: Date) -> Double? {

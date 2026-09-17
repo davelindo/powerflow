@@ -12,6 +12,7 @@ final class ConnectedDeviceReader: @unchecked Sendable {
     private let cacheLock = NSLock()
     private var cachedDevices: [ConnectedPowerDevice] = []
     private var cachedAt: Date?
+    private var lastAttemptAt: Date?
     private var isRefreshingDevices = false
 
     init(
@@ -44,11 +45,12 @@ final class ConnectedDeviceReader: @unchecked Sendable {
 
     private func refreshDeviceCacheIfNeeded(now: Date) {
         cacheLock.lock()
-        if isRefreshingDevices {
+        if !Self.shouldRefresh(lastAttemptAt: lastAttemptAt, isRefreshing: isRefreshingDevices, now: now) {
             cacheLock.unlock()
             return
         }
         isRefreshingDevices = true
+        lastAttemptAt = now
         cacheLock.unlock()
 
         refreshQueue.async { [weak self] in
@@ -67,6 +69,12 @@ final class ConnectedDeviceReader: @unchecked Sendable {
             self.isRefreshingDevices = false
             self.cacheLock.unlock()
         }
+    }
+
+    static func shouldRefresh(lastAttemptAt: Date?, isRefreshing: Bool, now: Date) -> Bool {
+        guard !isRefreshing else { return false }
+        guard let lastAttemptAt else { return true }
+        return now.timeIntervalSince(lastAttemptAt) >= refreshInterval
     }
 
     static func devices(fromProfilerJSON data: Data) -> [ConnectedPowerDevice] {

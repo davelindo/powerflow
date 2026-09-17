@@ -2,6 +2,22 @@ import XCTest
 @testable import Powerflow
 
 final class ConnectedDeviceReaderTests: XCTestCase {
+    func testFailedAttemptStillRequiresCooldown() {
+        let now = Date()
+        XCTAssertTrue(ConnectedDeviceReader.shouldRefresh(lastAttemptAt: nil, isRefreshing: false, now: now))
+        XCTAssertFalse(ConnectedDeviceReader.shouldRefresh(lastAttemptAt: now, isRefreshing: false, now: now.addingTimeInterval(2)))
+        XCTAssertTrue(ConnectedDeviceReader.shouldRefresh(lastAttemptAt: now, isRefreshing: false, now: now.addingTimeInterval(30)))
+        XCTAssertFalse(ConnectedDeviceReader.shouldRefresh(lastAttemptAt: now, isRefreshing: true, now: now.addingTimeInterval(30)))
+    }
+
+    @MainActor
+    func testSettingsHidesDeviceSamplingDemand() {
+        XCTAssertTrue(AppState.shouldReadConnectedDevices(popoverVisible: true, settingsVisible: false, tab: .devices))
+        XCTAssertFalse(AppState.shouldReadConnectedDevices(popoverVisible: true, settingsVisible: true, tab: .devices))
+        XCTAssertFalse(AppState.shouldReadConnectedDevices(popoverVisible: false, settingsVisible: false, tab: .devices))
+        XCTAssertFalse(AppState.shouldReadConnectedDevices(popoverVisible: true, settingsVisible: false, tab: .reports))
+    }
+
     func testNormalizesDeviceKeysWithoutBluetoothFrameworkAccess() {
         XCTAssertEqual(ConnectedDeviceKey.normalizedName("Keychron B6 Pro"), "keychron-b6-pro")
         XCTAssertEqual(ConnectedDeviceKey.normalizedAddress("AA:BB:CC:DD:EE:FF"), "aa-bb-cc-dd-ee-ff")

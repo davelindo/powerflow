@@ -1,6 +1,7 @@
 import Combine
 import CoreGraphics
 import Foundation
+import OSLog
 
 struct AppImpactSample: Sendable {
     let timestamp: Date
@@ -37,11 +38,13 @@ struct AppImpactSample: Sendable {
 @MainActor
 final class AppState: ObservableObject {
     static let shared = AppState()
+    private static let logger = Logger(subsystem: "com.powerflow.app", category: "Persistence")
 
     @Published private(set) var snapshot: PowerSnapshot
     @Published private(set) var statusSnapshot: PowerSnapshot
     @Published private(set) var statusBarTitle: String
     @Published var launchAtLoginError: String?
+    @Published private(set) var storageError: String?
     @Published var isPopoverVisible: Bool = false {
         didSet {
             handlePopoverVisibilityChange()
@@ -68,6 +71,7 @@ final class AppState: ObservableObject {
     private var reportState: PowerReportState
     private var reportRange: PowerReportRange
     private var selectedDashboardTab: PowerflowDashboardTab = .live
+    private var isSettingsVisible = false
     private var pendingSnapshot: PendingSnapshot?
     private var lastHistorySampleAt: Date?
     private var lastConsistencyRetryAt: Date?
@@ -103,6 +107,7 @@ final class AppState: ObservableObject {
         let snapshot: PowerSnapshot
         let history: [PowerHistoryPoint]
         let report: PowerReportState
+        var repository: PowerHistoryRepository? = nil
     }
 
     private static let overviewHourMinuteFormatter: DateComponentsFormatter = {
@@ -140,7 +145,13 @@ final class AppState: ObservableObject {
         reportRange = .day
         historyRepository = nil
         reportState = .empty(range: .day, isLoading: true)
-        appImpactCache = try? AppImpactCache()
+        var cacheError: Error?
+        do {
+            appImpactCache = try AppImpactCache()
+        } catch {
+            appImpactCache = nil
+            cacheError = error
+        }
         popoverStore = PopoverStateStore()
         statusBarTitle = PowerFormatter.statusTitle(
             snapshot: initialSnapshot,
@@ -152,6 +163,7 @@ final class AppState: ObservableObject {
         powerSourceMonitor = PowerSourceMonitor { [weak monitor] in
             monitor?.triggerImmediateUpdate()
         }
+        if let cacheError { recordStorageFailure(cacheError) }
         popoverStore.update(
             makePopoverState(
                 snapshot: initialSnapshot,
@@ -200,7 +212,7 @@ final class AppState: ObservableObject {
             ),
         ]
         reportRange = .day
-        historyRepository = nil
+        historyRepository = snapshotTestState.repository
         appImpactCache = nil
         reportState = snapshotTestState.report
         lastHistorySampleAt = seededHistory.last?.timestamp
@@ -238,14 +250,16 @@ final class AppState: ObservableObject {
         settings: PowerSettings,
         snapshot: PowerSnapshot,
         history: [PowerHistoryPoint],
-        report: PowerReportState = .empty(range: .day)
+        report: PowerReportState = .empty(range: .day),
+        repository: PowerHistoryRepository? = nil
     ) -> AppState {
         AppState(
             snapshotTestState: SnapshotTestState(
                 settings: settings,
                 snapshot: snapshot,
                 history: history,
-                report: report
+                report: report,
+                repository: repository
             )
         )
     }
@@ -263,15 +277,23 @@ final class AppState: ObservableObject {
         await repositoryInitializationTask?.value
         await historyWriteTask?.value
         if let historyRepository {
-            try? await historyRepository.close()
+            do {
+                try await historyRepository.close()
+            } catch {
+                recordStorageFailure(error)
+            }
         }
         await appImpactWriteTask?.value
         if settings.showAppEnergyOffenders, let appImpactCache {
-            try? await appImpactCache.persist(
-                appImpactHistory,
-                generation: appImpactGeneration,
-                force: true
-            )
+            do {
+                try await appImpactCache.persist(
+                    appImpactHistory,
+                    generation: appImpactGeneration,
+                    force: true
+                )
+            } catch {
+                recordStorageFailure(error)
+            }
         }
     }
 
@@ -288,14 +310,38 @@ final class AppState: ObservableObject {
     func selectDashboardTab(_ tab: PowerflowDashboardTab) {
         guard tab != selectedDashboardTab else { return }
         selectedDashboardTab = tab
-        monitor.setConnectedDevicesVisible(isPopoverVisible && tab == .devices)
+        monitor.setConnectedDevicesVisible(shouldReadConnectedDevices)
         if isPopoverVisible {
             refreshPopoverState(using: latestSnapshot)
         }
     }
 
-    private func apply(_ snapshot: PowerSnapshot) {
+    var shouldReadConnectedDevices: Bool {
+        Self.shouldReadConnectedDevices(
+            popoverVisible: isPopoverVisible,
+            settingsVisible: isSettingsVisible,
+            tab: selectedDashboardTab
+        )
+    }
+
+    static func shouldReadConnectedDevices(
+        popoverVisible: Bool,
+        settingsVisible: Bool,
+        tab: PowerflowDashboardTab
+    ) -> Bool {
+        popoverVisible && !settingsVisible && tab == .devices
+    }
+
+    func setSettingsVisible(_ visible: Bool) {
+        isSettingsVisible = visible
+        monitor.setConnectedDevicesVisible(shouldReadConnectedDevices)
+    }
+
+    func apply(_ snapshot: PowerSnapshot) {
         guard !isShuttingDown else { return }
+        // Counter deltas belong to consecutive raw samples, not the subset
+        // selected by display stabilization.
+        persistHistory(snapshot)
         let freshAppImpact = captureFreshAppImpact(from: snapshot)
         persistAppImpact(freshAppImpact)
         guard let acceptedSnapshot = resolveSnapshot(snapshot) else {
@@ -313,7 +359,6 @@ final class AppState: ObservableObject {
         if self.snapshot != acceptedSnapshot {
             self.snapshot = acceptedSnapshot
         }
-        persistHistory(acceptedSnapshot)
         appendHistory(acceptedSnapshot)
         refreshStatusBarTitle(using: acceptedSnapshot)
 
@@ -476,10 +521,14 @@ final class AppState: ObservableObject {
         let samples = appImpactHistory
         let generation = appImpactGeneration
         let previousTask = appImpactWriteTask
-        appImpactWriteTask = Task {
+        appImpactWriteTask = Task { [weak self] in
             await previousTask?.value
             guard !Task.isCancelled else { return }
-            try? await appImpactCache.persist(samples, generation: generation)
+            do {
+                try await appImpactCache.persist(samples, generation: generation)
+            } catch {
+                self?.recordStorageFailure(error)
+            }
         }
     }
 
@@ -488,7 +537,12 @@ final class AppState: ObservableObject {
         let generation = appImpactGeneration
         let enabled = settings.showAppEnergyOffenders
         appImpactHydrationTask = Task { [weak self] in
-            try? await appImpactCache.setEnabled(enabled, generation: generation)
+            do {
+                try await appImpactCache.setEnabled(enabled, generation: generation)
+            } catch {
+                self?.recordStorageFailure(error)
+                return
+            }
             guard enabled, !Task.isCancelled else { return }
             let restored = await appImpactCache.restore(generation: generation)
             guard let self,
@@ -511,10 +565,14 @@ final class AppState: ObservableObject {
         guard let appImpactCache else { return }
         let generation = appImpactGeneration
         let previousTask = appImpactWriteTask
-        appImpactWriteTask = Task {
+        appImpactWriteTask = Task { [weak self] in
             await previousTask?.value
             guard !Task.isCancelled else { return }
-            try? await appImpactCache.setEnabled(enabled, generation: generation)
+            do {
+                try await appImpactCache.setEnabled(enabled, generation: generation)
+            } catch {
+                self?.recordStorageFailure(error)
+            }
         }
     }
 
@@ -545,7 +603,7 @@ final class AppState: ObservableObject {
                 guard shouldRefreshReport, let self else { return }
                 self.refreshPersistentReport(endingAt: snapshot.timestamp)
             } catch {
-                guard shouldRefreshReport, let self else { return }
+                guard let self else { return }
                 self.applyReportFailure(error)
             }
         }
@@ -929,7 +987,7 @@ final class AppState: ObservableObject {
     }
 
     private func makeOffenderRows(from offenders: [AppEnergyOffender]) -> [PopoverOffenderRowState] {
-        offenders.map { offender in
+        offenders.prefix(PowerflowConstants.appEnergyOffenderLimit).map { offender in
             let processText = offender.processCount > 1 ? "\(offender.processCount) procs · " : ""
             let memoryText = Self.offenderMemoryFormatter.string(fromByteCount: Int64(offender.memoryBytes))
             let powerText = offender.estimatedPowerWatts.map {
@@ -1048,7 +1106,7 @@ final class AppState: ObservableObject {
         if !isPopoverVisible {
             selectedDashboardTab = .live
         }
-        monitor.setConnectedDevicesVisible(isPopoverVisible && selectedDashboardTab == .devices)
+        monitor.setConnectedDevicesVisible(shouldReadConnectedDevices)
         guard isPopoverVisible else { return }
         snapshot = latestSnapshot
         refreshPopoverState(using: latestSnapshot)
@@ -1058,19 +1116,17 @@ final class AppState: ObservableObject {
 
     private func initializeHistoryRepository() {
         repositoryInitializationTask = Task { [weak self] in
-            let repository = await Task.detached(priority: .utility) {
-                try? PowerHistoryRepository()
+            let result = await Task.detached(priority: .utility) {
+                Result { try PowerHistoryRepository() }
             }.value
             guard let self, !Task.isCancelled else { return }
-            guard let repository else {
-                reportState = .empty(range: reportRange)
-                if isPopoverVisible {
-                    refreshPopoverState(using: latestSnapshot)
-                }
-                return
+            switch result {
+            case .success(let repository):
+                historyRepository = repository
+                refreshPersistentReport()
+            case .failure(let error):
+                applyReportFailure(error)
             }
-            historyRepository = repository
-            refreshPersistentReport()
         }
     }
 
@@ -1115,6 +1171,7 @@ final class AppState: ObservableObject {
     }
 
     private func applyReportFailure(_ error: Error) {
+        Self.logger.error("History operation failed: \(error.localizedDescription, privacy: .private)")
         reportState = PowerReportState(
             range: reportRange,
             points: reportState.points,
@@ -1125,5 +1182,10 @@ final class AppState: ObservableObject {
         if isPopoverVisible {
             refreshPopoverState(using: latestSnapshot)
         }
+    }
+
+    private func recordStorageFailure(_ error: Error) {
+        storageError = "Local storage operation failed: \(error.localizedDescription)"
+        Self.logger.error("Storage operation failed: \(error.localizedDescription, privacy: .private)")
     }
 }

@@ -2,6 +2,51 @@ import XCTest
 @testable import Powerflow
 
 final class PowerSettingsTests: XCTestCase {
+    func testAttributionKeepsPackageBoundaryIndependentOfSystemCounter() {
+        XCTAssertEqual(MacPowerDataProvider.appEnergySource(hasPackagePower: true), .packagePower)
+        XCTAssertEqual(MacPowerDataProvider.appEnergySource(hasPackagePower: false), .systemMinusDisplay)
+    }
+
+    @MainActor
+    func testSteadyFifthContributorCanLeadRollingRanking() {
+        let base = Date()
+        var samples: [AppImpactSample] = []
+        for interval in 0..<10 {
+            var offenders: [AppEnergyOffender] = []
+            for rank in 0..<5 {
+                let isSteady = rank == 4
+                let identifier = isSteady ? "com.example.steady" : "com.example.burst\(interval)-\(rank)"
+                let name = isSteady ? "Steady" : "Burst"
+                let offender = AppEnergyOffender(
+                    groupID: identifier,
+                    primaryPID: 0,
+                    name: name,
+                    iconPath: nil,
+                    processCount: 1,
+                    impactScore: Double(5 - rank),
+                    cpuPercent: 1,
+                    memoryBytes: 0,
+                    pageinsPerSecond: 0,
+                    activityShare: 0.1,
+                    estimatedPowerWatts: 1,
+                    estimatedEnergyWh: 0.001,
+                    sampleDurationSeconds: 5
+                )
+                offenders.append(offender)
+            }
+            let sample = AppImpactSample(
+                timestamp: base.addingTimeInterval(Double(interval * 5)),
+                offenders: offenders,
+                durationSeconds: 5,
+                totalComputeEnergyWh: 0.01
+            )
+            samples.append(sample)
+        }
+        let rows = AppState.makeAppImpactRows(from: samples)
+        XCTAssertEqual(rows.first?.id, "com.example.steady")
+        XCTAssertEqual(rows.first?.energyWattHours ?? 0, 0.01, accuracy: 0.000001)
+    }
+
     func testBackgroundApplicationEnergyUsesDedicatedFiveSecondCadence() {
         var settings = PowerSettings.default
 

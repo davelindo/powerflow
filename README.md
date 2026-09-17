@@ -40,6 +40,15 @@ and non-bundle process names. Turning off **Track application energy** stops sam
 deletes that cache. Connected-device data is read only while the Devices tab is selected
 and is never persisted.
 
+Application energy is an activity-weighted estimate, not measured per-app watts.
+It integrates package power where available, otherwise system power minus display
+power. The system energy counter is used for system reports, not as a replacement
+for package energy. Intervals spanning a change of attribution source are omitted.
+GPU, media-engine, network, and other activity cannot be attributed precisely from
+CPU and paging counters. Report coverage excludes intervals with unavailable
+system-power telemetry. Corrupt history files are preserved in a `corrupt-*`
+folder beside the replacement database.
+
 ## Requirements
 
 - macOS 15+

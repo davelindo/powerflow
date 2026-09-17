@@ -197,12 +197,6 @@ final class AppEnergyMonitor {
                 pageinsPerSecond: pageinsPerSecond
             )
         }
-        .sorted { lhs, rhs in
-            if lhs.impactScore == rhs.impactScore {
-                return lhs.cpuPercent > rhs.cpuPercent
-            }
-            return lhs.impactScore > rhs.impactScore
-        }
     }
 
     private func currentProcessSamples() -> [ProcessSample] {
@@ -265,7 +259,6 @@ final class AppEnergyMonitor {
                 }
                 return lhs.impactScore > rhs.impactScore
             }
-            .prefix(PowerflowConstants.appEnergyOffenderLimit)
             .map { group in
                 AppEnergyOffender(
                     groupID: group.groupID,
