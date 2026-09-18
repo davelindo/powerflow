@@ -69,6 +69,22 @@ final class LayoutSnapshotTests: XCTestCase {
         )
     }
 
+    func testReportsWithRefreshFailureLayout() throws {
+        try requireSnapshotMode()
+        let appState = LayoutSnapshotFixtures.makeAppState(reportError: "History database error: disk is full")
+        try LayoutSnapshotHarness.assertSnapshot(
+            named: "popover-reports-error-light",
+            size: LayoutSnapshotHarness.dashboardPopoverSize,
+            view: StatusPopoverView(
+                appState: appState,
+                popoverStore: appState.popoverStore,
+                initialSelectedTab: .reports
+            )
+            .environmentObject(appState)
+            .snapshotEnvironment()
+        )
+    }
+
     func testDevicesPopoverLayout() throws {
         try requireSnapshotMode()
         let appState = LayoutSnapshotFixtures.makeAppState()
@@ -169,7 +185,7 @@ final class LayoutSnapshotTests: XCTestCase {
 
 private enum LayoutSnapshotFixtures {
     @MainActor
-    static func makeAppState() -> AppState {
+    static func makeAppState(reportError: String? = nil) -> AppState {
         var settings = PowerSettings.default
         settings.statusBarItem = .system
         settings.showChargingPower = false
@@ -183,7 +199,7 @@ private enum LayoutSnapshotFixtures {
             settings: settings,
             snapshot: snapshot,
             history: history,
-            report: makeReport(snapshot: snapshot, history: history)
+            report: makeReport(snapshot: snapshot, history: history, errorMessage: reportError)
         )
     }
 
@@ -197,6 +213,7 @@ private enum LayoutSnapshotFixtures {
         snapshot.timeRemainingMinutes = 154
         snapshot.systemIn = 39.9
         snapshot.systemLoad = 34.6
+        snapshot.systemLoadAvailable = true
         snapshot.batteryPower = 5.3
         snapshot.adapterPower = 67.1
         snapshot.adapterInputVoltage = 20.3
@@ -366,7 +383,8 @@ private enum LayoutSnapshotFixtures {
 
     private static func makeReport(
         snapshot: PowerSnapshot,
-        history: [PowerHistoryPoint]
+        history: [PowerHistoryPoint],
+        errorMessage: String?
     ) -> PowerReportState {
         let points = history.map { point in
             PowerReportPoint(
@@ -403,7 +421,7 @@ private enum LayoutSnapshotFixtures {
                 cycleCountResetDetected: false
             ),
             isLoading: false,
-            errorMessage: nil
+            errorMessage: errorMessage
         )
     }
 }
@@ -424,6 +442,11 @@ private enum LayoutSnapshotHarness {
     private static let meanDeltaTolerance = 0.003
     private static let changedPixelTolerance = 0.015
     private static let renderScale = 2.0
+
+    private final class SnapshotWindow: NSWindow {
+        // Match the bitmap scale even on an attached non-Retina display.
+        override var backingScaleFactor: CGFloat { LayoutSnapshotHarness.renderScale }
+    }
 
     static func assertSnapshot<V: View>(
         named name: String,
@@ -490,13 +513,23 @@ private enum LayoutSnapshotHarness {
     }
 
     private static func renderImage<V: View>(view: V, size: CGSize) -> NSImage {
+        // Pin the test process's scrollbar preference before SwiftUI lays out
+        // the view. A late scroller-style change leaves its cached gutter.
+        // The volatile argument domain never changes the user's saved setting.
+        let defaults = UserDefaults.standard
+        let originalArguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        var snapshotArguments = originalArguments
+        snapshotArguments["AppleShowScrollBars"] = "WhenScrolling"
+        defaults.setVolatileDomain(snapshotArguments, forName: UserDefaults.argumentDomain)
+        defer { defaults.setVolatileDomain(originalArguments, forName: UserDefaults.argumentDomain) }
+
         let hostingView = NSHostingView(
             rootView: view
                 .frame(width: size.width, height: size.height)
         )
         hostingView.frame = CGRect(origin: .zero, size: size)
 
-        let window = NSWindow(
+        let window = SnapshotWindow(
             contentRect: CGRect(origin: .zero, size: size),
             styleMask: [.borderless],
             backing: .buffered,
@@ -659,6 +692,7 @@ private extension View {
         environment(\.powerflowSnapshotRendering, true)
             .environment(\.colorScheme, colorScheme)
             .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+            .environment(\.timeZone, TimeZone(identifier: "America/Los_Angeles")!)
     }
 }
 

@@ -277,6 +277,13 @@ final class PowerSettingsTests: XCTestCase {
             attributed.compactMap(\.estimatedPowerWatts).reduce(0, +),
             16
         )
+        XCTAssertTrue(MacPowerDataProvider.attributingEstimatedPower(
+            to: [foreground], systemLoad: nil, screenPower: nil, packagePower: nil
+        ).isEmpty)
+        let measuredZero = MacPowerDataProvider.attributingEstimatedPower(
+            to: [foreground], systemLoad: 0, screenPower: nil, packagePower: nil
+        )
+        XCTAssertEqual(measuredZero.first?.estimatedPowerWatts, 0)
     }
 
     func testDecodingLegacyBatteryControlKeysPreservesSupportedSettings() throws {

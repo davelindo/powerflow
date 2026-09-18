@@ -161,8 +161,7 @@ struct PowerHistoryObservation: Sendable {
         guard MacPowerDataProvider.validatedPower(snapshot.systemLoad) != nil else {
             return false
         }
-        return snapshot.diagnostics.smc.hasSystemTotal
-            || MacPowerDataProvider.validatedPower(snapshot.diagnostics.telemetry?.systemLoadWatts) != nil
+        return snapshot.systemLoadAvailable
     }
 
     private static func nonnegativePower(_ value: Double) -> Double {

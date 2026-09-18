@@ -2,6 +2,16 @@ import XCTest
 @testable import Powerflow
 
 final class PowerFormatterTests: XCTestCase {
+    func testUnavailableSystemLoadIsNotDisplayedAsMeasuredZero() {
+        var settings = PowerSettings.default
+        settings.statusBarItem = .system
+        settings.showChargingPower = false
+        var snapshot = PowerSnapshot.empty
+        XCTAssertEqual(PowerFormatter.displayPowerString(snapshot: snapshot, settings: settings), "--")
+        snapshot.systemLoadAvailable = true
+        XCTAssertEqual(PowerFormatter.displayPowerString(snapshot: snapshot, settings: settings), "0W")
+    }
+
     func testWattsStringNormalizesNegativeZeroAndRejectsNonFiniteValues() {
         XCTAssertEqual(PowerFormatter.wattsString(-0.001), "0W")
         XCTAssertEqual(PowerFormatter.wattsString(.infinity), "--")
@@ -49,6 +59,7 @@ final class PowerFormatterTests: XCTestCase {
         var snapshot = PowerSnapshot.empty
         snapshot.systemIn = systemIn
         snapshot.systemLoad = systemLoad
+        snapshot.systemLoadAvailable = true
         snapshot.batteryLevel = batteryLevel
         snapshot.batteryLevelPrecise = Double(batteryLevel)
         snapshot.temperatureC = temperatureC

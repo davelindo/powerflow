@@ -134,7 +134,7 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
             && !hasSmcSystem
             && hasTelemetrySystem
         let systemIn = systemPower.input
-        let systemLoad = systemPower.load
+        let systemLoad = systemPower.load ?? 0
         let lidClosed = smc.lidClosed
         let screenPowerAvailable = smc.hasBrightness && lidClosed != true
         let screenPower = screenPowerAvailable ? smc.brightness : 0
@@ -176,18 +176,18 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
         let batteryCellVoltages = resolveBatteryCellVoltages(smc: smc, batteryInfo: batteryInfo)
         let counterSystemEnergyWh = systemEnergyCounterCalibrator.energyDeltaWh(
             rawCounter: telemetry?.accumulatedSystemEnergyConsumed,
-            systemLoadWatts: systemLoad,
+            systemLoadWatts: systemPower.load,
             uptime: sampleUptime
         )
         let appEnergyOffenders: [AppEnergyOffender]
         var appEnergySampleDurationSeconds: TimeInterval?
         var appEnergyTotalBudgetWh: Double?
-        if settings.showAppEnergyOffenders {
-            let computePowerBudget = Self.computePowerBudget(
-                systemLoad: systemLoad,
+        if settings.showAppEnergyOffenders,
+           let computePowerBudget = Self.computePowerBudget(
+                systemLoad: systemPower.load,
                 screenPower: screenPowerAvailable ? screenPower : nil,
                 packagePower: smc.hasHeatpipe ? heatpipePower : nil
-            )
+            ) {
             // The system counter measures a different boundary from package
             // power. Use it for system history, never to replace package energy.
             let source = Self.appEnergySource(hasPackagePower: smc.hasHeatpipe)
@@ -274,6 +274,7 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
             diagnostics: PowerDiagnostics(smc: smc, telemetry: telemetry)
         )
         snapshot.monotonicUptime = sampleUptime
+        snapshot.systemLoadAvailable = systemPower.load != nil
         snapshot.systemEnergyDeltaWh = counterSystemEnergyWh
         snapshot.computeEnergySource = lastComputeEnergySource
         snapshot.appEnergySampleDurationSeconds = appEnergySampleDurationSeconds
@@ -283,32 +284,32 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
 
     static func attributingEstimatedPower(
         to offenders: [AppEnergyOffender],
-        systemLoad: Double,
+        systemLoad: Double?,
         screenPower: Double?,
         packagePower: Double?
     ) -> [AppEnergyOffender] {
-        attributingEstimatedPower(
-            to: offenders,
-            computePowerBudget: computePowerBudget(
-                systemLoad: systemLoad,
-                screenPower: screenPower,
-                packagePower: packagePower
-            )
-        )
+        guard let budget = computePowerBudget(
+            systemLoad: systemLoad,
+            screenPower: screenPower,
+            packagePower: packagePower
+        ) else { return [] }
+        return attributingEstimatedPower(to: offenders, computePowerBudget: budget)
     }
 
     static func computePowerBudget(
-        systemLoad: Double,
+        systemLoad: Double?,
         screenPower: Double?,
         packagePower: Double?
-    ) -> Double {
-        let validatedSystemLoad = validatedPower(systemLoad) ?? 0
-        let validatedScreenPower = validatedPower(screenPower) ?? 0
-        let fallbackComputePower = max(validatedSystemLoad - validatedScreenPower, 0)
-        let measuredPackagePower = validatedPower(packagePower)
-        return measuredPackagePower.map { packagePower in
-            validatedSystemLoad > 0 ? min(packagePower, validatedSystemLoad) : packagePower
-        } ?? fallbackComputePower
+    ) -> Double? {
+        let validatedSystemLoad = validatedPower(systemLoad)
+        if let measuredPackagePower = validatedPower(packagePower) {
+            if let validatedSystemLoad, validatedSystemLoad > 0 {
+                return min(measuredPackagePower, validatedSystemLoad)
+            }
+            return measuredPackagePower
+        }
+        guard let validatedSystemLoad else { return nil }
+        return max(validatedSystemLoad - (validatedPower(screenPower) ?? 0), 0)
     }
 
     static func appEnergySource(hasPackagePower: Bool) -> PowerEnergySource {
@@ -564,7 +565,7 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
         telemetrySystemIn: Double?,
         telemetrySystemLoad: Double?,
         adapterInputPower: Double?
-    ) -> (input: Double, load: Double) {
+    ) -> (input: Double, load: Double?) {
         if smc.hasDeliveryRate && smc.hasSystemTotal {
             return (smc.deliveryRate, smc.systemTotal)
         }
@@ -574,8 +575,8 @@ final class MacPowerDataProvider: PowerDataProvider, @unchecked Sendable {
         }
 
         return (
-            smc.hasDeliveryRate ? smc.deliveryRate : (adapterInputPower ?? 0),
-            smc.hasSystemTotal ? smc.systemTotal : 0
+            smc.hasDeliveryRate ? smc.deliveryRate : (telemetrySystemIn ?? adapterInputPower ?? 0),
+            smc.hasSystemTotal ? smc.systemTotal : telemetrySystemLoad
         )
     }
 

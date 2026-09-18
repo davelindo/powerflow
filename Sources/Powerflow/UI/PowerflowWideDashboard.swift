@@ -177,7 +177,7 @@ private struct WideLiveDashboard: View {
         HStack(spacing: 0) {
             CompactLiveMetric(
                 title: "System load",
-                value: PowerFormatter.wattsString(snapshot.systemLoad)
+                value: snapshot.systemLoadAvailable ? PowerFormatter.wattsString(snapshot.systemLoad) : "--"
             )
             .longHoverDetails(title: "System details", systemImage: "laptopcomputer") {
                 SystemInspector(snapshot: snapshot)
@@ -949,6 +949,21 @@ private struct WideReportsDashboard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(spacing: 8) {
+                if let errorMessage = state.errorMessage {
+                    Label {
+                        Text("Report refresh failed. Showing saved data.")
+                            .font(.caption)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
+                    .foregroundStyle(Color(nsColor: .systemOrange))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color(nsColor: .systemOrange).opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .help(errorMessage)
+                    .accessibilityHint(errorMessage)
+                }
+
                 DashboardSurface {
                     if mode == .power {
                         powerChart

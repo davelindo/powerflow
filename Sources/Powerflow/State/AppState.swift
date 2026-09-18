@@ -300,7 +300,13 @@ final class AppState: ObservableObject {
     func selectReportRange(_ range: PowerReportRange) {
         guard range != reportRange || reportState.points.isEmpty else { return }
         reportRange = range
-        reportState = .empty(range: range, isLoading: historyRepository != nil)
+        reportState = PowerReportState(
+            range: range,
+            points: [],
+            summary: .empty,
+            isLoading: historyRepository != nil,
+            errorMessage: historyRepository == nil ? reportState.errorMessage : nil
+        )
         if isPopoverVisible {
             refreshPopoverState(using: latestSnapshot)
         }

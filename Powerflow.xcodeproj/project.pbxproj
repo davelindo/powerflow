@@ -41,6 +41,7 @@
 		9576DD0528AC0C05EA47E805 /* PopoverViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13BB9D8684B714FB707E93E6 /* PopoverViewState.swift */; };
 		960392097316F9F941AD1BB6 /* DetailedFlowStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC894B9C4AD4F51A4D57D731 /* DetailedFlowStateTests.swift */; };
 		96EFA1FB64E84925404474EA /* PowerHistoryRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6BD9F514BC73AF8B49697C /* PowerHistoryRepository.swift */; };
+		9DED77BF0161170BECB60B7B /* popover-reports-error-light.png in Resources */ = {isa = PBXBuildFile; fileRef = 81C4F9582C37CEC75717B315 /* popover-reports-error-light.png */; };
 		A6286B1FF2E17FA27EDD693D /* popover-devices-light.png in Resources */ = {isa = PBXBuildFile; fileRef = EF1DC6EA43AFD6A4A700AAA1 /* popover-devices-light.png */; };
 		A79750F8A7999532F6C5EF55 /* BatteryRatePolarityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACC56CACD56035A4C7FD1D82 /* BatteryRatePolarityStore.swift */; };
 		A98BF6195BEF7023DEA7689C /* PowerReports.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17C6A95AA32D5146A31DE606 /* PowerReports.swift */; };
@@ -106,6 +107,7 @@
 		6DD67E32881E210363A7B513 /* popover-dashboard-dark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "popover-dashboard-dark.png"; sourceTree = "<group>"; };
 		728B2BC628144E6ED30685E2 /* popover-settings-dark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "popover-settings-dark.png"; sourceTree = "<group>"; };
 		7B98734703B581344D7E68FF /* SMCReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMCReader.swift; sourceTree = "<group>"; };
+		81C4F9582C37CEC75717B315 /* popover-reports-error-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "popover-reports-error-light.png"; sourceTree = "<group>"; };
 		89CBC3379FFB40C0B7820147 /* ThermalPressureReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThermalPressureReader.swift; sourceTree = "<group>"; };
 		8ADBE6DD6CB243FFC97DDC05 /* SystemEnergyCounterCalibrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemEnergyCounterCalibrator.swift; sourceTree = "<group>"; };
 		8F482C4FB37D026A0537EF06 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -282,6 +284,7 @@
 				9A215345F41597D582D06D5E /* popover-devices-dark.png */,
 				EF1DC6EA43AFD6A4A700AAA1 /* popover-devices-light.png */,
 				1ED14BB67B8EBC740634ED54 /* popover-reports-dark.png */,
+				81C4F9582C37CEC75717B315 /* popover-reports-error-light.png */,
 				A8247BE66F9A5F1E487D488F /* popover-reports-light.png */,
 				728B2BC628144E6ED30685E2 /* popover-settings-dark.png */,
 				C31D7EC510A755DBB8C7163B /* popover-settings-light.png */,
@@ -393,6 +396,7 @@
 				C0A71EF5830DAD4A7F709B6C /* popover-devices-dark.png in Resources */,
 				A6286B1FF2E17FA27EDD693D /* popover-devices-light.png in Resources */,
 				FD40589BFEFC5FB27F5BFD83 /* popover-reports-dark.png in Resources */,
+				9DED77BF0161170BECB60B7B /* popover-reports-error-light.png in Resources */,
 				3E703E62DA574CCD3B5503F1 /* popover-reports-light.png in Resources */,
 				61022F73CBABB13D7DA61248 /* popover-settings-dark.png in Resources */,
 				6010F293F2EC33193D40C3D3 /* popover-settings-light.png in Resources */,

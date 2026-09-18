@@ -2,6 +2,37 @@ import XCTest
 @testable import Powerflow
 
 final class SystemEnergyCounterCalibratorTests: XCTestCase {
+    func testUnavailableSystemLoadInvalidatesCounterCalibration() {
+        var calibrator = SystemEnergyCounterCalibrator()
+        for index in 0...12 {
+            _ = calibrator.energyDeltaWh(
+                rawCounter: UInt64(index * 100), systemLoadWatts: 36, uptime: Double(index * 10)
+            )
+        }
+        XCTAssertTrue(calibrator.isValidated)
+        XCTAssertNil(calibrator.energyDeltaWh(rawCounter: 1_300, systemLoadWatts: nil, uptime: 130))
+        XCTAssertFalse(calibrator.isValidated)
+    }
+
+    func testStallInvalidatesCounterEvenAtLowPowerAndAllowsRecalibration() {
+        var calibrator = SystemEnergyCounterCalibrator()
+        for index in 0...12 {
+            _ = calibrator.energyDeltaWh(
+                rawCounter: UInt64(index * 100), systemLoadWatts: 0.5, uptime: Double(index * 10)
+            )
+        }
+        XCTAssertTrue(calibrator.isValidated)
+        XCTAssertNil(calibrator.energyDeltaWh(rawCounter: 1_200, systemLoadWatts: 0.5, uptime: 130))
+        XCTAssertFalse(calibrator.isValidated)
+        XCTAssertNil(calibrator.energyDeltaWh(rawCounter: 1_400, systemLoadWatts: 0.5, uptime: 140))
+        for index in 15...27 {
+            _ = calibrator.energyDeltaWh(
+                rawCounter: UInt64(index * 100), systemLoadWatts: 0.5, uptime: Double(index * 10)
+            )
+        }
+        XCTAssertTrue(calibrator.isValidated)
+    }
+
     func testValidatesStableCounterScaleBeforeReturningEnergy() throws {
         var calibrator = SystemEnergyCounterCalibrator()
         var lastEnergy: Double?

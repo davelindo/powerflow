@@ -2,6 +2,19 @@ import XCTest
 @testable import Powerflow
 
 final class SMCReaderFanCacheTests: XCTestCase {
+    func testFanCountRetriesAfterAnUnavailableReading() {
+        let connection = FanKeyRecorder(keys: [
+            "F0Ac": .rpm(1_800), "F1Ac": .rpm(1_800), "F2Ac": .rpm(1_800),
+        ])
+        let reader = SMCReader(cachedCpuTempKeys: [], keyReader: connection)
+        XCTAssertEqual(reader.readFanReadings(connection, includeDetails: false).map(\.index), [0, 1])
+        connection.set(.count(3), for: "FNum")
+        XCTAssertEqual(reader.readFanReadings(connection, includeDetails: true).map(\.index), [0, 1, 2])
+        XCTAssertEqual(connection.readCount(for: "FNum"), 2)
+        _ = reader.readFanReadings(connection, includeDetails: false)
+        XCTAssertEqual(connection.readCount(for: "FNum"), 2)
+    }
+
     func testFanPercentageDoesNotChangeWithDetailLevel() throws {
         let connection = FanKeyRecorder(keys: [
             "FNum": .count(1),

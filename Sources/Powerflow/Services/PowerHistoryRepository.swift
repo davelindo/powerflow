@@ -302,7 +302,7 @@ actor PowerHistoryRepository {
         guard let previous = lastObservation else { return }
         integrate(previous: previous, current: observation)
         let currentMinute = Self.minute(containing: observation.timestamp)
-        try flushPending { $0 < currentMinute }
+        try flushPending(pruningAt: currentMinute) { $0 < currentMinute }
     }
 
     func flush() throws {
@@ -315,7 +315,7 @@ actor PowerHistoryRepository {
     }
 
     func report(range: PowerReportRange, endingAt endDate: Date = Date()) throws -> PowerReportState {
-        try flush()
+        try flushPending(pruningAt: Self.minute(containing: endDate)) { _ in true }
         guard let database = handle.pointer else { return .empty(range: range) }
 
         let endMinuteExclusive = Self.minute(containing: endDate) + 60
@@ -401,9 +401,11 @@ actor PowerHistoryRepository {
         }
     }
 
-    private func flushPending(where shouldFlush: (Int64) -> Bool) throws {
+    private func flushPending(pruningAt requestedMinute: Int64? = nil, where shouldFlush: (Int64) -> Bool) throws {
         let minutes = pendingMinutes.keys.filter(shouldFlush).sorted()
-        guard !minutes.isEmpty, let database = handle.pointer else { return }
+        let pruneMinute = requestedMinute ?? minutes.last
+        let shouldPrune = pruneMinute != nil && pruneMinute != lastPrunedMinute
+        guard !minutes.isEmpty || shouldPrune, let database = handle.pointer else { return }
 
         try Self.execute("BEGIN IMMEDIATE TRANSACTION", in: database)
         do {
@@ -411,20 +413,23 @@ actor PowerHistoryRepository {
                 guard let aggregate = pendingMinutes[minute], aggregate.observedSeconds > 0 else { continue }
                 try Self.upsert(aggregate, minute: minute, in: database)
             }
-            try pruneIfNeeded(nowMinute: minutes.last ?? 0, in: database)
+            if shouldPrune, let pruneMinute {
+                try prune(nowMinute: pruneMinute, in: database)
+            }
             try Self.execute("COMMIT", in: database)
         } catch {
             try? Self.execute("ROLLBACK", in: database)
             throw error
+        }
+        if shouldPrune {
+            lastPrunedMinute = pruneMinute
         }
         for minute in minutes {
             pendingMinutes.removeValue(forKey: minute)
         }
     }
 
-    private func pruneIfNeeded(nowMinute: Int64, in database: OpaquePointer) throws {
-        guard lastPrunedMinute != nowMinute else { return }
-        lastPrunedMinute = nowMinute
+    private func prune(nowMinute: Int64, in database: OpaquePointer) throws {
         let cutoff = nowMinute - Int64(Self.retention)
         let statement = try Self.prepare("DELETE FROM minute_history WHERE minute < ?", in: database)
         defer { sqlite3_finalize(statement) }

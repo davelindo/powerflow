@@ -90,6 +90,12 @@ Verify the recorded layout snapshots:
 scripts/verify_layout_snapshots.sh
 ```
 
+Layout snapshots fix the window backing scale to 2× and pin locale, time zone,
+and overlay scrollbars within the test process. Record and verify with the same
+macOS/Xcode version; existing baselines were verified with Xcode 27.0 beta
+(`27A5209h`). The error-report fixture also checks that saved data remains visibly
+marked when a refresh fails.
+
 Regenerate the README screenshot assets:
 
 ```

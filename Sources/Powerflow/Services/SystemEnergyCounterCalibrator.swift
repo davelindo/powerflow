@@ -16,16 +16,16 @@ struct SystemEnergyCounterCalibrator {
     private var lastSample: (raw: UInt64, uptime: TimeInterval, watts: Double)?
     private var calibration: [CalibrationInterval] = []
     private var scaleWhPerUnit: Double?
-    private var stalledSamples = 0
 
     var isValidated: Bool { scaleWhPerUnit != nil }
 
     mutating func energyDeltaWh(
         rawCounter: UInt64?,
-        systemLoadWatts: Double,
+        systemLoadWatts: Double?,
         uptime: TimeInterval
     ) -> Double? {
         guard let rawCounter,
+              let systemLoadWatts,
               uptime.isFinite,
               systemLoadWatts.isFinite,
               systemLoadWatts >= 0 else {
@@ -47,15 +47,12 @@ struct SystemEnergyCounterCalibrator {
 
         let rawDelta = rawCounter - previous.raw
         guard rawDelta > 0 else {
-            if max(previous.watts, systemLoadWatts) > 1 {
-                stalledSamples += 1
-                if stalledSamples >= 3 {
-                    reset(keeping: (rawCounter, uptime, systemLoadWatts))
-                }
-            }
+            // History integrates power when the counter cannot supply an
+            // interval. Revalidate before accepting a later catch-up delta,
+            // which can include energy already covered by that fallback.
+            reset(keeping: (rawCounter, uptime, systemLoadWatts))
             return nil
         }
-        stalledSamples = 0
 
         let referenceWh = ((previous.watts + systemLoadWatts) * 0.5) * duration / 3_600
         guard referenceWh.isFinite, referenceWh > 0 else { return nil }
@@ -96,7 +93,6 @@ struct SystemEnergyCounterCalibrator {
         lastSample = sample
         calibration.removeAll(keepingCapacity: true)
         scaleWhPerUnit = nil
-        stalledSamples = 0
     }
 
     private mutating func validateIfReady() {

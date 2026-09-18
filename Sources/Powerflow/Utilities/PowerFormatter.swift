@@ -17,7 +17,7 @@ enum PowerFormatter {
         }
         switch settings.statusBarItem {
         case .system:
-            return snapshot.systemLoad
+            return snapshot.systemLoadAvailable ? snapshot.systemLoad : nil
         case .screen:
             return snapshot.screenPowerAvailable ? snapshot.screenPower : nil
         case .heatpipe:
@@ -85,7 +85,7 @@ enum PowerFormatter {
             "{health}": healthValue,
             "{wh}": whValue,
             "{input}": wattsString(snapshot.systemIn),
-            "{load}": wattsString(snapshot.systemLoad),
+            "{load}": snapshot.systemLoadAvailable ? wattsString(snapshot.systemLoad) : "--",
             "{screen}": screenValue,
             "{heatpipe}": heatpipeValue,
             "{smc}": smcValue,

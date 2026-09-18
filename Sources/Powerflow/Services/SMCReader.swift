@@ -485,10 +485,13 @@ final class SMCReader {
         let count: Int
         if let cachedFanCount {
             count = cachedFanCount
-        } else {
-            let countValue = connection.readKey("FNum")?.floatValue() ?? 0
-            count = min(max(0, Int(countValue.rounded())), 6)
+        } else if let countValue = connection.readKey("FNum")?.floatValue(),
+                  countValue.isFinite, (0...6).contains(countValue) {
+            count = Int(countValue.rounded())
             cachedFanCount = count
+        } else {
+            // A failed read is not stable metadata. Retry it on the next sample.
+            count = 0
         }
         let indices = count > 0 ? Array(0..<count) : [0, 1]
         var readings: [SMCFanReading] = []

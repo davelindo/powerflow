@@ -152,6 +152,7 @@ struct PowerSnapshot: Equatable {
     var timeRemainingMinutes: Int?
     var systemIn: Double
     var systemLoad: Double
+    var systemLoadAvailable: Bool = false
     var batteryPower: Double
     var adapterPower: Double
     var adapterInputVoltage: Double?
@@ -307,7 +308,7 @@ extension PowerSnapshot {
     }
 
     var isPowerBalanceConsistent: Bool {
-        guard hasSystemPowerData else { return true }
+        guard hasSystemPowerData, systemLoadAvailable else { return true }
         let net = systemIn - systemLoad
         let netMagnitude = abs(net)
         let batteryMagnitude = abs(batteryPower)
