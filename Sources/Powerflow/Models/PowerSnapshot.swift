@@ -21,6 +21,12 @@ struct BatteryDetails: Equatable {
     var cycleCount: Int?
 }
 
+struct BatteryCapacityDetails: Equatable {
+    let remainingMAh: Double?
+    let fullChargeMAh: Double?
+    let designMAh: Double?
+}
+
 struct ThermalPressure: Equatable {
     let level: Int
 
@@ -51,7 +57,7 @@ struct PowerDiagnostics: Equatable {
     static let empty = PowerDiagnostics(smc: .empty, telemetry: nil)
 }
 
-struct AppEnergyOffender: Equatable, Identifiable {
+struct AppEnergyOffender: Codable, Equatable, Identifiable, Sendable {
     let groupID: String
     let primaryPID: Int32
     let name: String
@@ -61,8 +67,56 @@ struct AppEnergyOffender: Equatable, Identifiable {
     let cpuPercent: Double
     let memoryBytes: UInt64
     let pageinsPerSecond: Double
+    /// Share of currently observed process activity, including activity that is
+    /// not prominent enough to be shown as an offender row.
+    let activityShare: Double?
+    /// Estimated share of measured compute power. This is deliberately an
+    /// estimate: macOS does not expose public per-process watt telemetry.
+    let estimatedPowerWatts: Double?
+    /// Estimated energy assigned during this process-counter interval. Unlike
+    /// `estimatedPowerWatts`, this value is emitted only once so cached UI
+    /// refreshes cannot count the same interval repeatedly.
+    let estimatedEnergyWh: Double?
+    /// Duration represented by the energy estimate.
+    let sampleDurationSeconds: TimeInterval?
+
+    init(
+        groupID: String,
+        primaryPID: Int32,
+        name: String,
+        iconPath: String?,
+        processCount: Int,
+        impactScore: Double,
+        cpuPercent: Double,
+        memoryBytes: UInt64,
+        pageinsPerSecond: Double,
+        activityShare: Double? = nil,
+        estimatedPowerWatts: Double? = nil,
+        estimatedEnergyWh: Double? = nil,
+        sampleDurationSeconds: TimeInterval? = nil
+    ) {
+        self.groupID = groupID
+        self.primaryPID = primaryPID
+        self.name = name
+        self.iconPath = iconPath
+        self.processCount = processCount
+        self.impactScore = impactScore
+        self.cpuPercent = cpuPercent
+        self.memoryBytes = memoryBytes
+        self.pageinsPerSecond = pageinsPerSecond
+        self.activityShare = activityShare
+        self.estimatedPowerWatts = estimatedPowerWatts
+        self.estimatedEnergyWh = estimatedEnergyWh
+        self.sampleDurationSeconds = sampleDurationSeconds
+    }
 
     var id: String { groupID }
+}
+
+enum PowerEnergySource: String, Codable, Equatable, Sendable {
+    case validatedSystemCounter
+    case packagePower
+    case systemMinusDisplay
 }
 
 enum ConnectedDeviceKind: String, Equatable {
@@ -86,6 +140,11 @@ struct ConnectedPowerDevice: Equatable, Identifiable {
 
 struct PowerSnapshot: Equatable {
     var timestamp: Date
+    var monotonicUptime: TimeInterval = 0
+    var systemEnergyDeltaWh: Double? = nil
+    var computeEnergySource: PowerEnergySource? = nil
+    var appEnergySampleDurationSeconds: TimeInterval? = nil
+    var appEnergyTotalBudgetWh: Double? = nil
     var isCharging: Bool
     var isExternalPowerConnected: Bool
     var batteryLevel: Int
@@ -93,6 +152,7 @@ struct PowerSnapshot: Equatable {
     var timeRemainingMinutes: Int?
     var systemIn: Double
     var systemLoad: Double
+    var systemLoadAvailable: Bool = false
     var batteryPower: Double
     var adapterPower: Double
     var adapterInputVoltage: Double?
@@ -115,6 +175,7 @@ struct PowerSnapshot: Equatable {
     var batteryTemperatureC: Double?
     var batteryHealthPercent: Double?
     var batteryRemainingWh: Double?
+    var batteryCapacityDetails: BatteryCapacityDetails?
     var batteryCurrentMA: Double?
     var batteryCellVoltages: [Double]
     var batteryCycleCountSMC: Int?
@@ -159,6 +220,7 @@ struct PowerSnapshot: Equatable {
         batteryTemperatureC: nil,
         batteryHealthPercent: nil,
         batteryRemainingWh: nil,
+        batteryCapacityDetails: nil,
         batteryCurrentMA: nil,
         batteryCellVoltages: [],
         batteryCycleCountSMC: nil,
@@ -246,7 +308,7 @@ extension PowerSnapshot {
     }
 
     var isPowerBalanceConsistent: Bool {
-        guard hasSystemPowerData else { return true }
+        guard hasSystemPowerData, systemLoadAvailable else { return true }
         let net = systemIn - systemLoad
         let netMagnitude = abs(net)
         let batteryMagnitude = abs(batteryPower)

@@ -160,10 +160,10 @@ struct SettingsView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         CardContainer(
-            padding: isCompact ? 12 : 14,
+            padding: isCompact ? 10 : 14,
             tint: layout == .window ? tint : nil
         ) {
-            VStack(alignment: .leading, spacing: isCompact ? 10 : 12) {
+            VStack(alignment: .leading, spacing: isCompact ? 8 : 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Image(systemName: systemImage)
                         .font(.caption.weight(.semibold))
@@ -213,7 +213,7 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, isCompact ? 8 : 10)
     }
 
     private func settingsValueText(_ value: String) -> some View {
@@ -243,15 +243,24 @@ struct SettingsView: View {
     }
 
     private var settingsStackContent: some View {
-        VStack(alignment: .leading, spacing: isCompact ? 8 : 16) {
-            if layout == .window {
-                windowTitle
+        Group {
+            if isCompact {
+                VStack(alignment: .leading, spacing: 10) {
+                    menubarSection
+                    powerSection
+                    updatesSection
+                    generalSection
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 16) {
+                    windowTitle
+                    menubarSection
+                    powerSection
+                    batterySection
+                    updatesSection
+                    generalSection
+                }
             }
-            menubarSection
-            powerSection
-            batterySection
-            updatesSection
-            generalSection
         }
     }
 
@@ -281,41 +290,30 @@ struct SettingsView: View {
                     Divider()
 
                     settingsRow("Preset") {
-                        Menu {
-                            ForEach(formatPresets) { preset in
-                                Button(preset.name) {
-                                    appState.settings.statusBarFormat = preset.format
-                                }
+                        Picker("Preset", selection: $appState.settings.statusBarFormat) {
+                            if currentPresetLabel == "Custom" {
+                                Text("Custom").tag(appState.settings.statusBarFormat)
                             }
-                        } label: {
-                            SelectionMenuLabel(
-                                title: currentPresetLabel,
-                                width: isCompact ? 138 : 156
-                            )
+                            ForEach(formatPresets) { preset in
+                                Text(preset.name).tag(preset.format)
+                            }
                         }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: isCompact ? 150 : 168)
                     }
 
                     Divider()
 
                     settingsRow("Icon") {
-                        Menu {
+                        Picker("Icon", selection: $appState.settings.statusBarIcon) {
                             ForEach(PowerSettings.StatusBarIcon.allCases) { icon in
-                                Button {
-                                    appState.settings.statusBarIcon = icon
-                                } label: {
-                                    if icon == appState.settings.statusBarIcon {
-                                        Label(icon.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(icon.label)
-                                    }
-                                }
+                                Text(icon.label).tag(icon)
                             }
-                        } label: {
-                            SelectionMenuLabel(
-                                title: appState.settings.statusBarIcon.label,
-                                width: isCompact ? 138 : 156
-                            )
                         }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: isCompact ? 150 : 168)
                     }
                 }
 
@@ -533,24 +531,14 @@ struct SettingsView: View {
         ) {
             settingsRows {
                 settingsRow("Item") {
-                    Menu {
+                    Picker("Item", selection: $appState.settings.statusBarItem) {
                         ForEach(PowerSettings.StatusBarItem.allCases) { item in
-                            Button {
-                                appState.settings.statusBarItem = item
-                            } label: {
-                                if item == appState.settings.statusBarItem {
-                                    Label(item.label, systemImage: "checkmark")
-                                } else {
-                                    Text(item.label)
-                                }
-                            }
+                            Text(item.label).tag(item)
                         }
-                    } label: {
-                        SelectionMenuLabel(
-                            title: appState.settings.statusBarItem.label,
-                            width: isCompact ? 138 : 156
-                        )
                     }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: isCompact ? 150 : 168)
                 }
 
                 Divider()
@@ -593,14 +581,8 @@ struct SettingsView: View {
             tint: Color(nsColor: .systemCyan)
         ) {
             settingsRows {
-                settingsRow("Refresh") {
-                    settingsValueText(String(format: "%.1fs", appState.settings.updateIntervalSeconds))
-                }
-
-                Divider()
-
                 VStack(alignment: .leading, spacing: 8) {
-                    settingsRow("Rate") {
+                    settingsRow("Refresh rate") {
                         settingsValueText(String(format: "%.1fs", appState.settings.updateIntervalSeconds))
                     }
 
@@ -628,11 +610,18 @@ struct SettingsView: View {
 
                 Divider()
 
-                Toggle("Show process activity", isOn: $appState.settings.showAppEnergyOffenders)
+                Toggle("Track application energy", isOn: $appState.settings.showAppEnergyOffenders)
                     .toggleStyle(.switch)
-                    .help("Samples local CPU, memory, and paging activity for Recent Offenders. No process activity leaves this Mac.")
-                    .accessibilityHint("Samples local process activity for Recent Offenders. Turn off to hide and clear those rows.")
+                    .help("Integrates measured compute power and allocates energy from local CPU and paging activity. No process activity leaves this Mac.")
+                    .accessibilityHint("Tracks estimated application energy locally. Turn off to stop sampling and delete the private ten-minute restart cache.")
                     .padding(.vertical, 10)
+
+                if let error = appState.storageError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
             }
         }
     }

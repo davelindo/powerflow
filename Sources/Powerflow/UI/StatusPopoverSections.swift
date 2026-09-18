@@ -350,7 +350,10 @@ struct HistorySection: View {
 
                 if focus == .system {
                     Divider()
-                    AppEnergyOffendersView(offenders: state.offenders)
+                    AppEnergyOffendersView(
+                        offenders: state.offenders,
+                        isEnabled: state.isAppImpactEnabled
+                    )
                 }
             }
         } else {
@@ -394,6 +397,7 @@ struct HistorySection: View {
 
 struct AppEnergyOffendersView: View {
     let offenders: [PopoverOffenderRowState]
+    let isEnabled: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -407,8 +411,12 @@ struct AppEnergyOffendersView: View {
                     .foregroundStyle(.tertiary)
             }
 
-            if offenders.isEmpty {
-                Text("No standout app activity.")
+            if !isEnabled {
+                Text("Process activity is disabled in Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if offenders.isEmpty {
+                Text("Collecting application activity…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -784,6 +792,7 @@ struct PowerSparkline: View {
     }
 }
 
+@MainActor
 private final class SparklinePointCache {
     static let shared = SparklinePointCache()
     private let maxEntries = 96
@@ -1034,84 +1043,6 @@ struct FooterActionButton: View {
     }
 }
 
-struct SelectionMenuLabel: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
-
-    let title: String
-    var width: CGFloat? = nil
-
-    private let controlShape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-
-    var body: some View {
-        if snapshotRendering {
-            fallbackLabel
-        } else {
-        #if compiler(>=6.2)
-            if #available(macOS 26, *) {
-                baseLabel
-                    .glassEffect(.regular.interactive(), in: controlShape)
-            } else {
-                fallbackLabel
-            }
-        #else
-            fallbackLabel
-        #endif
-        }
-    }
-
-    private var baseLabel: some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-
-            Spacer(minLength: 8)
-
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .frame(width: width, alignment: .leading)
-        .contentShape(controlShape)
-    }
-
-    private var fallbackLabel: some View {
-        baseLabel
-            .background(controlBackground, in: controlShape)
-            .overlay(
-                controlShape
-                    .strokeBorder(Color.white.opacity(colorScheme == .light ? 0.48 : 0.12))
-            )
-            .shadow(
-                color: Color.black.opacity(colorScheme == .light ? 0.05 : 0.16),
-                radius: 8,
-                y: 2
-            )
-    }
-
-    private var controlBackground: some ShapeStyle {
-        AnyShapeStyle(
-            LinearGradient(
-                colors: colorScheme == .light
-                    ? [
-                        Color.white.opacity(0.62),
-                        Color.white.opacity(0.28)
-                    ]
-                    : [
-                        Color.white.opacity(0.18),
-                        Color.white.opacity(0.08)
-                    ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-    }
-}
 
 struct PowerFlowView: View {
     let state: PopoverFlowState

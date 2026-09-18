@@ -24,7 +24,5 @@
   <true/>
   <key>NSHumanReadableCopyright</key>
   <string>MIT License</string>
-  <key>NSBluetoothAlwaysUsageDescription</key>
-  <string>Powerflow reads connected device battery levels.</string>
 </dict>
 </plist>

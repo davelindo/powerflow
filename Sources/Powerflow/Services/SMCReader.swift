@@ -136,7 +136,7 @@ final class SMCReader {
     private let batteryPercentKeys = ["SBAS", "BRSC"]
     private let batteryCapacityKeys = ["SBAR", "B0RM"]
     // Deduplicated CPU temperature keys - discovered dynamically and cached
-    private let cpuTempKeys: [String] = Array(Set([
+    private let cpuTempKeys: [String] = [
         "Tp09", "Tp0T", "Tp01", "Tp05", "Tp0D", "Tp0H", "Tp0L", "Tp0P", "Tp0X", "Tp0b",
         "Tg05", "Tg0D", "Tg0L", "Tg0T",
         "TC10", "TC11", "TC12", "TC13",
@@ -152,14 +152,18 @@ final class SMCReader {
         "Tf04", "Tf09", "Tf0A", "Tf0B", "Tf0D", "Tf0E",
         "Tf44", "Tf49", "Tf4A", "Tf4B", "Tf4D", "Tf4E",
         "Tf14", "Tf18", "Tf19", "Tf1A", "Tf24", "Tf28", "Tf29", "Tf2A",
-    ]))
+    ]
 
-    private var connection: SMCConnection?
+    private var connection: FanKeyReading?
     private var preferredHeatpipeKey: String?
     private var preferredBatteryVoltageKey: String?
     private var preferredBatteryPercentKey: String?
     private var preferredCapacityKey: String?
     private var cachedCpuTempKeys: [String] = []
+    private var cachedFanCount: Int?
+    private var cachedFanMaximums: [Int: CachedFanValue] = [:]
+    private var cachedFanMinimums: [Int: CachedFanValue] = [:]
+    private var cachedCpuTemperature: CPUTemperatureSample?
     private var didScanCpuTempKeys = false
     private let cpuTempScanCooldown = PowerflowConstants.cpuTempScanCooldown
     private var lastCpuTempScanFailure: Date?
@@ -171,21 +175,36 @@ final class SMCReader {
         }
     }
 
+    init(cachedCpuTempKeys: [String], keyReader: FanKeyReading) {
+        if !cachedCpuTempKeys.isEmpty {
+            self.cachedCpuTempKeys = cachedCpuTempKeys
+            self.didScanCpuTempKeys = true
+        }
+        self.connection = keyReader
+    }
+
     var cpuTemperatureKeysCache: [String] {
         cachedCpuTempKeys
     }
 
+    func resetCachedCPUTemperature() {
+        cachedCpuTemperature = nil
+    }
+
     func readPowerData(detailLevel: PowerSnapshotDetailLevel, hints: SMCReadHints) -> SMCPowerData {
-        guard let connection = getConnection() else { return .empty }
+        guard let smcConnection = getConnection() else { return .empty }
         switch detailLevel {
         case .summary:
-            return readSummaryPowerData(connection, hints: hints)
+            return readSummaryPowerData(smcConnection, hints: hints)
         case .full:
-            return readFullPowerData(connection)
+            return readFullPowerData(smcConnection)
         }
     }
 
-    private func readSummaryPowerData(_ connection: SMCConnection, hints: SMCReadHints) -> SMCPowerData {
+    private func readSummaryPowerData(
+        _ connection: FanKeyReading,
+        hints: SMCReadHints
+    ) -> SMCPowerData {
         var data = SMCPowerData.empty
 
         if let value = connection.readKey("PPBR")?.floatValue() {
@@ -229,6 +248,9 @@ final class SMCReader {
             data.brightness = value
             data.hasBrightness = true
         }
+        if hints.needsScreenPower, let value = connection.readKey("MSLD")?.floatValue() {
+            data.lidClosed = value > 0.5
+        }
 
         if hints.needsHeatpipePower,
            let heatpipe = readPreferredValue(
@@ -243,14 +265,21 @@ final class SMCReader {
         }
 
         if hints.needsTemperature {
+            let now = Date()
             if let value = connection.readKey("TB0T")?.floatValue() {
                 data.temperature = value
                 data.hasTemperature = true
             }
-            if let cpuTemp = readCPUTemperature(connection, allowScan: false) {
+            let shouldRefresh = shouldRefreshCachedCPUTemperature(now: now)
+            if !shouldRefresh, let cached = cachedCpuTemperature {
+                data.cpuTemperature = cached.value
+                data.cpuTemperatureKey = cached.key
+                data.hasCpuTemperature = true
+            } else if let cpuTemp = readCPUTemperature(connection, allowScan: true) {
                 data.cpuTemperature = cpuTemp.value
                 data.cpuTemperatureKey = cpuTemp.key
                 data.hasCpuTemperature = true
+                storeCPUTemperature(cpuTemp, now: now)
             }
         }
 
@@ -259,7 +288,11 @@ final class SMCReader {
         return data
     }
 
-    private func readFullPowerData(_ connection: SMCConnection) -> SMCPowerData {
+    private struct CachedFanValue {
+        let value: Double?
+    }
+
+    private func readFullPowerData(_ connection: FanKeyReading) -> SMCPowerData {
         var data = SMCPowerData.empty
 
         if let value = connection.readKey("PPBR")?.floatValue() {
@@ -371,7 +404,7 @@ final class SMCReader {
             data.hasTemperature = true
         }
 
-        // Dynamically scan for battery cell voltages (supports 1-8 cells)
+        // Dynamically scan for battery cell voltages (supports 1-8 cells).
         for cellIndex in 1...8 {
             let key = "SBA\(cellIndex)"
             guard let value = connection.readKey(key)?.floatValue(), value > 0 else { continue }
@@ -385,17 +418,46 @@ final class SMCReader {
 
         data.platformName = connection.readKey("RPlt")?.stringValue()
         data.fanReadings = readFanReadings(connection, includeDetails: true)
-        if let cpuTemp = readCPUTemperature(connection, allowScan: true) {
+        let now = Date()
+        let shouldRefresh = shouldRefreshCachedCPUTemperature(now: now)
+        if !shouldRefresh, let cached = cachedCpuTemperature {
+            data.cpuTemperature = cached.value
+            data.cpuTemperatureKey = cached.key
+            data.hasCpuTemperature = true
+        } else if let cpuTemp = readCPUTemperature(connection, allowScan: true) {
             data.cpuTemperature = cpuTemp.value
             data.cpuTemperatureKey = cpuTemp.key
             data.hasCpuTemperature = true
+            storeCPUTemperature(cpuTemp, now: now)
         }
 
         return data
     }
 
+    private struct CPUTemperatureSample {
+        let value: Double
+        let key: String?
+        let timestamp: Date
+    }
+
+    private static let cpuTemperatureCacheInterval = PowerflowConstants.fullCpuTempRefreshInterval
+
+    private func shouldRefreshCachedCPUTemperature(now: Date) -> Bool {
+        guard let cachedCpuTemperature else { return true }
+        return now.timeIntervalSince(cachedCpuTemperature.timestamp) >= Self.cpuTemperatureCacheInterval
+    }
+
+    private func storeCPUTemperature(_ sample: (value: Double, key: String)?, now: Date) {
+        guard let sample else { return }
+        cachedCpuTemperature = CPUTemperatureSample(
+            value: sample.value,
+            key: sample.key,
+            timestamp: now
+        )
+    }
+
     private func readPreferredValue(
-        _ connection: SMCConnection,
+        _ connection: FanKeyReading,
         preferredKey: inout String?,
         candidates: [String],
         requirePositive: Bool
@@ -416,64 +478,104 @@ final class SMCReader {
         return nil
     }
 
-    private func readFanReadings(
-        _ connection: SMCConnection,
+    func readFanReadings(
+        _ connection: FanKeyReading,
         includeDetails: Bool
     ) -> [SMCFanReading] {
-        let countValue = connection.readKey("FNum")?.floatValue() ?? 0
-        let count = max(0, Int(countValue.rounded()))
-        let maxFans = min(count, 6)
-        let indices = maxFans > 0 ? Array(0..<maxFans) : [0, 1]
+        let count: Int
+        if let cachedFanCount {
+            count = cachedFanCount
+        } else if let countValue = connection.readKey("FNum")?.floatValue(),
+                  countValue.isFinite, (0...6).contains(countValue) {
+            count = Int(countValue.rounded())
+            cachedFanCount = count
+        } else {
+            // A failed read is not stable metadata. Retry it on the next sample.
+            count = 0
+        }
+        let indices = count > 0 ? Array(0..<count) : [0, 1]
         var readings: [SMCFanReading] = []
 
         for index in indices {
             let key = "F\(index)Ac"
             guard let rpm = connection.readKey(key)?.floatValue(), rpm > 0 else { continue }
-            let maxKey = "F\(index)Mx"
-            let maxRpm = connection.readKey(maxKey)?.floatValue()
-            let minRpm: Double?
-            let targetRpm: Double?
-            let modeRaw: Int?
+            let maxRpm = cachedFanValue(
+                for: index,
+                key: "F\(index)Mx",
+                connection: connection,
+                cache: &cachedFanMaximums
+            )
             if includeDetails {
-                let minKey = "F\(index)Mn"
-                minRpm = connection.readKey(minKey)?.floatValue()
-                let targetKey = "F\(index)Tg"
-                targetRpm = connection.readKey(targetKey)?.floatValue()
-                let modeKey = "F\(index)Md"
-                modeRaw = connection.readKey(modeKey)?.floatValue().map { Int($0.rounded()) }
-            } else {
-                minRpm = nil
-                targetRpm = nil
-                modeRaw = nil
-            }
-            let percentMax: Double?
-            if let maxRpm, maxRpm > 0 {
-                if includeDetails, let minRpm, minRpm > 0, maxRpm > minRpm {
-                    percentMax = min(100, max(0, (rpm - minRpm) / (maxRpm - minRpm) * 100))
-                } else {
-                    percentMax = min(100, (rpm / maxRpm) * 100)
-                }
-            } else {
-                percentMax = nil
-            }
-            readings.append(
-                SMCFanReading(
+                let minRpm = cachedFanValue(
+                    for: index,
+                    key: "F\(index)Mn",
+                    connection: connection,
+                    cache: &cachedFanMinimums
+                )
+                let targetRpm = connection.readKey("F\(index)Tg")?.floatValue()
+                let modeRaw = connection.readKey("F\(index)Md")?.floatValue().map { Int($0.rounded()) }
+                readings.append(Self.fanReading(
                     index: index,
                     rpm: rpm,
                     maxRpm: maxRpm,
                     minRpm: minRpm,
                     targetRpm: targetRpm,
-                    modeRaw: modeRaw,
-                    percentMax: percentMax
-                )
-            )
+                    modeRaw: modeRaw
+                ))
+            } else {
+                readings.append(Self.fanReading(
+                    index: index,
+                    rpm: rpm,
+                    maxRpm: maxRpm,
+                    minRpm: nil,
+                    targetRpm: nil,
+                    modeRaw: nil
+                ))
+            }
         }
 
         return readings
     }
 
+    private func cachedFanValue(
+        for index: Int,
+        key: String,
+        connection: FanKeyReading,
+        cache: inout [Int: CachedFanValue]
+    ) -> Double? {
+        if let cached = cache[index] {
+            return cached.value
+        }
+        let value = connection.readKey(key)?.floatValue()
+        cache[index] = CachedFanValue(value: value)
+        return value
+    }
+
+    private static func fanReading(
+        index: Int,
+        rpm: Double,
+        maxRpm: Double?,
+        minRpm: Double?,
+        targetRpm: Double?,
+        modeRaw: Int?
+    ) -> SMCFanReading {
+        var percentMax: Double?
+        if let maxRpm, maxRpm > 0 {
+            percentMax = min(100, max(0, (rpm / maxRpm) * 100))
+        }
+        return SMCFanReading(
+            index: index,
+            rpm: rpm,
+            maxRpm: maxRpm,
+            minRpm: minRpm,
+            targetRpm: targetRpm,
+            modeRaw: modeRaw,
+            percentMax: percentMax
+        )
+    }
+
     private func readCPUTemperature(
-        _ connection: SMCConnection,
+        _ connection: FanKeyReading,
         allowScan: Bool
     ) -> (value: Double, key: String)? {
         let now = Date()
@@ -531,7 +633,7 @@ final class SMCReader {
         return maxTemp > 0 ? (maxTemp, maxKey) : nil
     }
 
-    private func getConnection() -> SMCConnection? {
+    private func getConnection() -> FanKeyReading? {
         if let connection = connection {
             return connection
         }
@@ -540,3 +642,9 @@ final class SMCReader {
         return newConnection
     }
 }
+
+protocol FanKeyReading {
+    func readKey(_ key: String) -> SMCValue?
+}
+
+extension SMCConnection: FanKeyReading {}

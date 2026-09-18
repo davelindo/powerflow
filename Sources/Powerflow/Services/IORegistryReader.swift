@@ -9,6 +9,7 @@ struct PowerTelemetry: Equatable {
     var systemLoad: Int?
     var systemPowerIn: Int?
     var systemVoltageIn: Int?
+    var accumulatedSystemEnergyConsumed: UInt64? = nil
 
     static let empty = PowerTelemetry(
         adapterEfficiencyLoss: nil,
@@ -32,6 +33,7 @@ struct PowerTelemetry: Equatable {
             || systemLoad != nil
             || systemPowerIn != nil
             || systemVoltageIn != nil
+            || accumulatedSystemEnergyConsumed != nil
     }
 
     var adapterEfficiencyLossWatts: Double? { adapterEfficiencyLoss.map { Double($0) / 1000.0 } }
@@ -50,6 +52,8 @@ struct BatteryInfo: Equatable {
     var maxCapacity: Int?
     var designCapacity: Int?
     var nominalChargeCapacity: Int?
+    var remainingCapacityMAh: Int?
+    var fullChargeCapacityMAh: Int?
     var maximumCapacityPercent: Int?
     var capacityUnits: BatteryCapacityUnits
     var batteryPercent: Int
@@ -71,6 +75,8 @@ struct BatteryInfo: Equatable {
         maxCapacity: nil,
         designCapacity: nil,
         nominalChargeCapacity: nil,
+        remainingCapacityMAh: nil,
+        fullChargeCapacityMAh: nil,
         maximumCapacityPercent: nil,
         capacityUnits: .percent,
         batteryPercent: 0,
@@ -93,12 +99,18 @@ final class IORegistryReader {
     func readBatteryInfo() -> BatteryInfo {
         guard let dict = readSmartBattery() else { return .empty }
 
+        let batteryData = dict["BatteryData"] as? NSDictionary
+
         let currentCapacity = intValue(dict, key: "CurrentCapacity") ?? 0
         let maxCapacity = intValue(dict, key: "MaxCapacity")
             ?? intValue(dict, key: "AppleRawMaxCapacity")
             ?? intValue(dict, key: "DesignCapacity")
-        let designCapacity = intValue(dict, key: "DesignCapacity")
-        let nominalChargeCapacity = intValue(dict, key: "NominalChargeCapacity")
+        let designCapacity = intValue(from: dict, key: "DesignCapacity", fallback: batteryData)
+        let nominalChargeCapacity = intValue(from: dict, key: "NominalChargeCapacity", fallback: batteryData)
+        let remainingCapacityMAh = intValue(from: dict, key: "AppleRawCurrentCapacity", fallback: batteryData)
+            ?? intValue(from: dict, key: "RemainingCapacity", fallback: batteryData)
+        let fullChargeCapacityMAh = intValue(from: dict, key: "FullChargeCapacity", fallback: batteryData)
+            ?? intValue(from: dict, key: "AppleRawMaxCapacity", fallback: batteryData)
         let maximumCapacityPercent = intValue(dict, key: "MaximumCapacityPercent")
         let isCharging = boolValue(dict, key: "IsCharging") ?? false
         let isExternalConnected = boolValue(dict, key: "ExternalConnected") ?? false
@@ -130,6 +142,8 @@ final class IORegistryReader {
             maxCapacity: maxCapacity,
             designCapacity: designCapacity,
             nominalChargeCapacity: nominalChargeCapacity,
+            remainingCapacityMAh: remainingCapacityMAh,
+            fullChargeCapacityMAh: fullChargeCapacityMAh,
             maximumCapacityPercent: maximumCapacityPercent,
             capacityUnits: capacityUnits,
             batteryPercent: batteryPercent,
@@ -168,6 +182,18 @@ final class IORegistryReader {
 
     private func intValue(_ dict: NSDictionary?, key: String) -> Int? {
         dict?[key] as? Int
+    }
+
+    private func uint64Value(_ dict: NSDictionary?, key: String) -> UInt64? {
+        guard let item = dict?[key] else { return nil }
+        if let int = item as? UInt64 { return int }
+        if let number = item as? NSNumber {
+            let signedValue = number.int64Value
+            return signedValue >= 0 ? UInt64(signedValue) : nil
+        }
+        if let int = item as? Int, int >= 0 { return UInt64(int) }
+        if let string = item as? String { return UInt64(string) }
+        return nil
     }
 
     private func boolValue(_ dict: NSDictionary?, key: String) -> Bool? {
@@ -312,15 +338,18 @@ final class IORegistryReader {
         let systemLoad = intValue(telemetry, key: "SystemLoad")
         let systemPowerIn = intValue(telemetry, key: "SystemPowerIn")
         let systemVoltageIn = intValue(telemetry, key: "SystemVoltageIn")
-        guard [
-            adapterEfficiencyLoss,
-            batteryPower,
-            systemCurrentIn,
-            systemEnergyConsumed,
-            systemLoad,
-            systemPowerIn,
-            systemVoltageIn,
-        ].contains(where: { $0 != nil }) else {
+        let accumulatedSystemEnergyConsumed = uint64Value(
+            telemetry,
+            key: "AccumulatedSystemEnergyConsumed"
+        )
+        guard adapterEfficiencyLoss != nil
+            || batteryPower != nil
+            || systemCurrentIn != nil
+            || systemEnergyConsumed != nil
+            || systemLoad != nil
+            || systemPowerIn != nil
+            || systemVoltageIn != nil
+            || accumulatedSystemEnergyConsumed != nil else {
             return nil
         }
 
@@ -331,7 +360,8 @@ final class IORegistryReader {
             systemEnergyConsumed: systemEnergyConsumed,
             systemLoad: systemLoad,
             systemPowerIn: systemPowerIn,
-            systemVoltageIn: systemVoltageIn
+            systemVoltageIn: systemVoltageIn,
+            accumulatedSystemEnergyConsumed: accumulatedSystemEnergyConsumed
         )
     }
 

@@ -83,9 +83,9 @@ struct TemplateTokenDropDelegate: DropDelegate {
         let providers = info.itemProviders(for: [UTType.text])
         guard let provider = providers.first else { return false }
         provider.loadObject(ofClass: NSString.self) { object, _ in
-            guard let payload = object as? String,
-                  let token = resolveToken(payload) else { return }
+            guard let payload = object as? String else { return }
             DispatchQueue.main.async {
+                guard let token = resolveToken(payload) else { return }
                 var updated = tokens
                 let index = max(0, min(proposedIndex, updated.count))
                 updated.insert(token, at: index)

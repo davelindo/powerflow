@@ -35,15 +35,26 @@ final class SMCValueTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(value.floatValue()), 300.0, accuracy: 0.001)
     }
 
-    func testFloatValueDecodesBigEndianPayload() throws {
+    func testFloatValueDecodesLittleEndianPayload() throws {
         let value = SMCValue(
             key: "PSTR",
             dataSize: 4,
             dataType: "flt",
-            bytes: [0x42, 0x48, 0x00, 0x00]
+            bytes: [0x00, 0x00, 0x48, 0x42]
         )
 
         XCTAssertEqual(try XCTUnwrap(value.floatValue()), 50.0, accuracy: 0.001)
+    }
+
+    func testFloatValueRejectsNonFinitePayload() {
+        let value = SMCValue(
+            key: "PSTR",
+            dataSize: 4,
+            dataType: "flt",
+            bytes: [0x00, 0x00, 0x80, 0x7f]
+        )
+
+        XCTAssertNil(value.floatValue())
     }
 
     func testSignedIntegersDecodeNegativeBigEndianPayloads() throws {

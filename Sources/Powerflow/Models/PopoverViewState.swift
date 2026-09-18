@@ -35,6 +35,7 @@ struct PopoverOverviewState: Equatable {
 struct PopoverFlowState: Equatable {
     let snapshot: PowerSnapshot
     let diagram: FlowDiagramState
+    let breakdown: DetailedFlowState
     let batteryLevelPrecise: Double
     let batteryOverlay: BatteryIconRenderer.Overlay
 }
@@ -69,6 +70,19 @@ struct PopoverOffenderRowState: Identifiable, Equatable {
     let iconPath: String?
 }
 
+struct PopoverAppImpactRowState: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let sharePercent: Double
+    let shareText: String
+    let energyWattHours: Double?
+    let energyText: String
+    let peakPowerWatts: Double?
+    let peakPowerText: String
+    let detailText: String
+    let iconPath: String?
+}
+
 struct PopoverConnectedDeviceRowState: Identifiable, Equatable {
     let id: String
     let name: String
@@ -90,10 +104,12 @@ struct PopoverConnectedDevicesState: Equatable {
 
 struct PopoverHistoryState: Equatable {
     let hasEnoughSamples: Bool
+    let isAppImpactEnabled: Bool
     let systemChart: PopoverHistoryChartState?
     let thermalChart: PopoverHistoryChartState?
     let adapterChart: PopoverHistoryChartState?
     let offenders: [PopoverOffenderRowState]
+    let appImpact: [PopoverAppImpactRowState]
 }
 
 struct PopoverViewState: Equatable {
@@ -101,6 +117,7 @@ struct PopoverViewState: Equatable {
     let flow: PopoverFlowState
     let connectedDevices: PopoverConnectedDevicesState
     let history: PopoverHistoryState
+    let report: PowerReportState
 
     static let empty = PopoverViewState(
         overview: PopoverOverviewState(
@@ -113,6 +130,7 @@ struct PopoverViewState: Equatable {
         flow: PopoverFlowState(
             snapshot: .empty,
             diagram: FlowDiagramState(snapshot: .empty),
+            breakdown: DetailedFlowState(snapshot: .empty),
             batteryLevelPrecise: 0,
             batteryOverlay: .none
         ),
@@ -123,11 +141,14 @@ struct PopoverViewState: Equatable {
         ),
         history: PopoverHistoryState(
             hasEnoughSamples: false,
+            isAppImpactEnabled: false,
             systemChart: nil,
             thermalChart: nil,
             adapterChart: nil,
-            offenders: []
-        )
+            offenders: [],
+            appImpact: []
+        ),
+        report: .empty()
     )
 }
 
@@ -229,5 +250,65 @@ struct FlowDiagramState: Equatable {
 
     var showBatteryToJunction: Bool {
         batteryToJunction > 0.05
+    }
+}
+
+struct DetailedFlowState: Equatable {
+    let adapterToSystem: Double
+    let adapterToBattery: Double
+    let batteryToSystem: Double
+    let systemLoad: Double
+    let packagePower: Double?
+    let packageLabel: String
+    let displayPower: Double?
+    let otherPower: Double
+
+    init(snapshot: PowerSnapshot) {
+        let system = Self.validPower(snapshot.systemLoad) ?? 0
+        let input = Self.validPower(snapshot.systemIn) ?? 0
+
+        systemLoad = system
+        adapterToSystem = min(input, system)
+        adapterToBattery = max(input - system, 0)
+        batteryToSystem = max(system - input, 0)
+        packageLabel = snapshot.socDisplayName ?? snapshot.packagePowerLabel
+
+        var package = snapshot.heatpipeKey == nil
+            ? nil
+            : Self.validMeasuredChannel(snapshot.heatpipePower, systemLoad: system)
+        var display = snapshot.screenPowerAvailable
+            ? Self.validMeasuredChannel(snapshot.screenPower, systemLoad: system)
+            : nil
+
+        if (package ?? 0) + (display ?? 0) > system * 1.05 {
+            package = nil
+            display = nil
+        }
+
+        packagePower = package
+        displayPower = display
+        otherPower = max(system - (package ?? 0) - (display ?? 0), 0)
+    }
+
+    var adapterSourceTotal: Double {
+        adapterToSystem + adapterToBattery
+    }
+
+    var hasBatterySource: Bool {
+        batteryToSystem > 0.05
+    }
+
+    var hasBatteryDestination: Bool {
+        adapterToBattery > 0.05
+    }
+
+    private static func validPower(_ value: Double) -> Double? {
+        guard value.isFinite, value >= 0, value <= PowerflowConstants.maximumValidPowerWatts else { return nil }
+        return value
+    }
+
+    private static func validMeasuredChannel(_ value: Double, systemLoad: Double) -> Double? {
+        guard let value = validPower(value), value > 0.05, value <= systemLoad * 1.05 else { return nil }
+        return value
     }
 }

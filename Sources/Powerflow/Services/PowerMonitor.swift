@@ -1,7 +1,9 @@
 import Foundation
 
-final class PowerMonitor {
+/// All mutable state is confined to `updateQueue`.
+final class PowerMonitor: @unchecked Sendable {
     private static let backgroundUpdateInterval = PowerflowConstants.backgroundUpdateInterval
+    private static let backgroundAppEnergyUpdateInterval = PowerflowConstants.backgroundAppEnergyUpdateInterval
     private static let warmupSampleTarget = PowerflowConstants.warmupSampleTarget
     private static let warmupMaxDuration = PowerflowConstants.warmupMaxDuration
 
@@ -11,6 +13,7 @@ final class PowerMonitor {
     private var detailLevel: PowerSnapshotDetailLevel
     private var settings: PowerSettings
     private var isPopoverVisible: Bool
+    private var includeConnectedDevices: Bool
     private let updateQueue = DispatchQueue(label: "PowerMonitor.update", qos: .utility)
     private let updateQueueKey = DispatchSpecificKey<Void>()
     private var warmupState: WarmupState?
@@ -33,6 +36,7 @@ final class PowerMonitor {
         )
         self.detailLevel = .summary
         self.isPopoverVisible = false
+        self.includeConnectedDevices = false
         updateQueue.setSpecific(key: updateQueueKey, value: ())
     }
 
@@ -67,6 +71,18 @@ final class PowerMonitor {
         }
     }
 
+    func setConnectedDevicesVisible(_ isVisible: Bool) {
+        runOnUpdateQueue { [weak self] in
+            guard let self else { return }
+            let resolvedVisibility = self.isPopoverVisible && isVisible
+            guard resolvedVisibility != self.includeConnectedDevices else { return }
+            self.includeConnectedDevices = resolvedVisibility
+            if resolvedVisibility {
+                self.sendImmediate(detailLevelOverride: .full, countWarmup: false)
+            }
+        }
+    }
+
     private func scheduleTimer() {
         // Cancel existing timer atomically
         if let oldTimer = timer {
@@ -77,7 +93,12 @@ final class PowerMonitor {
         }
 
         let newTimer = DispatchSource.makeTimerSource(queue: updateQueue)
-        newTimer.schedule(deadline: .now() + interval, repeating: interval)
+        let leeway = min(max(interval * 0.2, 0.1), 1.0)
+        newTimer.schedule(
+            deadline: .now() + interval,
+            repeating: interval,
+            leeway: .milliseconds(Int(leeway * 1_000))
+        )
         newTimer.setEventHandler { [weak self] in
             self?.sendImmediate()
         }
@@ -92,10 +113,12 @@ final class PowerMonitor {
         requestUpdate(detailLevelOverride: detailLevelOverride, countWarmup: countWarmup)
     }
 
-    func stop() {
-        runOnUpdateQueue { [weak self] in
-            guard let self else { return }
-            self.cancelTimer()
+    func stopAndWait() async {
+        await withCheckedContinuation { continuation in
+            updateQueue.async { [weak self] in
+                self?.cancelTimer()
+                continuation.resume()
+            }
         }
     }
 
@@ -129,7 +152,11 @@ final class PowerMonitor {
         countWarmup: Bool = true
     ) {
         let level = detailLevelOverride ?? detailLevel
-        let snapshot = provider.readSnapshot(detailLevel: level, settings: settings)
+        let snapshot = provider.readSnapshot(
+            detailLevel: level,
+            settings: settings,
+            includeConnectedDevices: includeConnectedDevices
+        )
         if countWarmup {
             updateWarmupState()
         }
@@ -138,7 +165,11 @@ final class PowerMonitor {
 
     private func refreshSchedule(force: Bool) {
         let isWarmup = warmupState != nil
-        let targetInterval = resolvedInterval(settings, isPopoverVisible: isPopoverVisible, isWarmup: isWarmup)
+        let targetInterval = Self.resolvedInterval(
+            settings,
+            isPopoverVisible: isPopoverVisible,
+            isWarmup: isWarmup
+        )
         let targetDetailLevel = resolvedDetailLevel(isPopoverVisible: isPopoverVisible, isWarmup: isWarmup)
         let intervalChanged = abs(targetInterval - interval) > 0.01
         let detailChanged = targetDetailLevel != detailLevel
@@ -170,7 +201,7 @@ final class PowerMonitor {
         refreshSchedule(force: true)
     }
 
-    private func resolvedInterval(
+    static func resolvedInterval(
         _ settings: PowerSettings,
         isPopoverVisible: Bool,
         isWarmup: Bool
@@ -178,6 +209,9 @@ final class PowerMonitor {
         let base = max(settings.updateIntervalSeconds, PowerSettings.minimumUpdateInterval)
         guard !isWarmup else { return base }
         guard !isPopoverVisible else { return base }
+        if settings.showAppEnergyOffenders {
+            return max(base, Self.backgroundAppEnergyUpdateInterval)
+        }
         return max(base, Self.backgroundUpdateInterval)
     }
 
@@ -188,7 +222,7 @@ final class PowerMonitor {
         (isPopoverVisible || isWarmup) ? .full : .summary
     }
 
-    private func runOnUpdateQueue(_ work: @escaping () -> Void) {
+    private func runOnUpdateQueue(_ work: @escaping @Sendable () -> Void) {
         if DispatchQueue.getSpecific(key: updateQueueKey) != nil {
             work()
         } else {

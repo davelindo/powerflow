@@ -102,8 +102,9 @@ struct SMCValue {
         switch dataType {
         case "flt":
             guard bytes.count >= 4 else { return nil }
-            let raw = Self.bigEndianUInt32(bytes)
-            return Double(Float32(bitPattern: raw))
+            let raw = Self.littleEndianUInt32(bytes)
+            let value = Double(Float32(bitPattern: raw))
+            return value.isFinite ? value : nil
         case "si8":
             guard let value = bytes.first else { return nil }
             return Double(Int8(bitPattern: value))
@@ -173,6 +174,13 @@ struct SMCValue {
             | (UInt32(bytes[1]) << 16)
             | (UInt32(bytes[2]) << 8)
             | UInt32(bytes[3])
+    }
+
+    private static func littleEndianUInt32(_ bytes: [UInt8]) -> UInt32 {
+        UInt32(bytes[0])
+            | (UInt32(bytes[1]) << 8)
+            | (UInt32(bytes[2]) << 16)
+            | (UInt32(bytes[3]) << 24)
     }
 
     private static func bigEndianUInt64(_ bytes: [UInt8]) -> UInt64 {

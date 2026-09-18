@@ -17,7 +17,7 @@ enum PowerFormatter {
         }
         switch settings.statusBarItem {
         case .system:
-            return snapshot.systemLoad
+            return snapshot.systemLoadAvailable ? snapshot.systemLoad : nil
         case .screen:
             return snapshot.screenPowerAvailable ? snapshot.screenPower : nil
         case .heatpipe:
@@ -33,7 +33,30 @@ enum PowerFormatter {
     }
 
     static func wattsString(_ value: Double) -> String {
-        String(format: "%.0fW", value)
+        guard value.isFinite else { return "--" }
+        let normalized = abs(value) < 0.05 ? 0 : value
+        return String(format: "%.0fW", normalized)
+    }
+
+    static func energyString(_ wattHours: Double) -> String {
+        guard wattHours.isFinite, wattHours >= 0 else { return "--" }
+        let milliWattHours = wattHours * 1_000
+        if milliWattHours == 0 {
+            return "0mWh"
+        }
+        if milliWattHours < 1 {
+            return "<1mWh"
+        }
+        if milliWattHours < 10 {
+            return String(format: "%.1fmWh", milliWattHours)
+        }
+        if wattHours < 1 {
+            return String(format: "%.0fmWh", milliWattHours)
+        }
+        if wattHours < 10 {
+            return String(format: "%.2fWh", wattHours)
+        }
+        return String(format: "%.1fWh", wattHours)
     }
 
     static func tokenValues(snapshot: PowerSnapshot, settings: PowerSettings) -> [String: String] {
@@ -62,7 +85,7 @@ enum PowerFormatter {
             "{health}": healthValue,
             "{wh}": whValue,
             "{input}": wattsString(snapshot.systemIn),
-            "{load}": wattsString(snapshot.systemLoad),
+            "{load}": snapshot.systemLoadAvailable ? wattsString(snapshot.systemLoad) : "--",
             "{screen}": screenValue,
             "{heatpipe}": heatpipeValue,
             "{smc}": smcValue,
@@ -95,6 +118,7 @@ enum PowerFormatter {
     }
 }
 
+@MainActor
 enum BatteryIconRenderer {
     enum Overlay: String {
         case none

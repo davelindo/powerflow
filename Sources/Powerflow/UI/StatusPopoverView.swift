@@ -3,22 +3,49 @@ import SwiftUI
 
 struct StatusPopoverView: View {
     @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject private var popoverStore: PopoverStateStore
     @State private var showingSettings: Bool
     private let appState: AppState
+    private let initialSelectedTab: PowerflowDashboardTab
+    private let initialReportMode: PowerflowReportMode
 
     @MainActor
     init(
         appState: AppState,
         popoverStore: PopoverStateStore? = nil,
-        initialShowingSettings: Bool = false
+        initialShowingSettings: Bool = false,
+        initialSelectedTab: PowerflowDashboardTab = .live,
+        initialReportMode: PowerflowReportMode = .power
     ) {
         self.appState = appState
+        self.initialSelectedTab = initialSelectedTab
+        self.initialReportMode = initialReportMode
         _popoverStore = ObservedObject(wrappedValue: popoverStore ?? appState.popoverStore)
         _showingSettings = State(initialValue: initialShowingSettings)
     }
 
     var body: some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                ScrollView {
+                    popoverContent
+                        .frame(minHeight: 460)
+                }
+                .scrollIndicators(.automatic)
+            } else {
+                popoverContent
+            }
+        }
+        .frame(width: 420, height: 460)
+        .modifier(SnapshotShellModifier(enabled: snapshotRendering))
+        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: showingSettings)
+        .onAppear { appState.setSettingsVisible(showingSettings) }
+        .onChange(of: showingSettings) { _, visible in appState.setSettingsVisible(visible) }
+        .onDisappear { appState.setSettingsVisible(false) }
+    }
+
+    private var popoverContent: some View {
         VStack(spacing: 0) {
             PopoverHeader(showingSettings: $showingSettings)
 
@@ -33,11 +60,13 @@ struct StatusPopoverView: View {
                             )
                         )
                 } else {
-                    ScrollView {
-                        popoverSections
-                            .padding(12)
-                    }
-                    .scrollIndicators(.hidden)
+                    PowerflowWideDashboard(
+                        state: popoverStore.state,
+                        initialSelectedTab: initialSelectedTab,
+                        initialReportMode: initialReportMode,
+                        onReportRangeChange: appState.selectReportRange,
+                        onTabChange: appState.selectDashboardTab
+                    )
                     .transition(
                         .asymmetric(
                             insertion: .move(edge: .leading).combined(with: .opacity),
@@ -47,50 +76,8 @@ struct StatusPopoverView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
         }
-        .frame(width: 402, height: 590)
-        .modifier(SnapshotShellModifier(enabled: snapshotRendering))
-        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: showingSettings)
-    }
-
-    @ViewBuilder
-    private var popoverSections: some View {
-        if snapshotRendering {
-            fallbackPopoverSections
-        } else {
-        #if compiler(>=6.2)
-            if #available(macOS 26, *) {
-                GlassEffectContainer(spacing: 10) {
-                    mainSections
-                }
-            } else {
-                fallbackPopoverSections
-            }
-        #else
-            fallbackPopoverSections
-        #endif
-        }
-    }
-
-    private var fallbackPopoverSections: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            mainSections
-        }
-    }
-
-    @ViewBuilder
-    private var mainSections: some View {
-        let popoverState = popoverStore.state
-
-        Group {
-            OverviewSection(state: popoverState.overview, snapshot: popoverState.flow.snapshot)
-            FlowSection(state: popoverState.flow)
-            if !popoverState.connectedDevices.isEmpty {
-                ConnectedDevicesSection(state: popoverState.connectedDevices)
-            }
-            HistorySection(state: popoverState.history)
-        }
+        .frame(width: 420)
     }
 }
 
@@ -130,21 +117,48 @@ private struct PopoverHeader: View {
             .keyboardShortcut("q")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, 7)
     }
 }
 
 private struct PopoverIconButton: View {
+    @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
+
     let systemImage: String
     let help: String
     let action: () -> Void
 
     var body: some View {
+        if snapshotRendering {
+            fallbackButton
+        } else {
+        #if compiler(>=6.2)
+            if #available(macOS 26, *) {
+                Button(action: action) {
+                    buttonLabel
+                }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .help(help)
+            } else {
+                fallbackButton
+            }
+        #else
+            fallbackButton
+        #endif
+        }
+    }
+
+    private var buttonLabel: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: 28, height: 28)
+    }
+
+    private var fallbackButton: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 30, height: 30)
+            buttonLabel
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -157,6 +171,7 @@ private struct PopoverIconButton: View {
 }
 
 private struct SnapshotShellModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
     let enabled: Bool
 
     private var shellShape: RoundedRectangle {
@@ -171,226 +186,386 @@ private struct SnapshotShellModifier: ViewModifier {
                 .clipShape(shellShape)
                 .compositingGroup()
         } else {
-            content.background(Color.clear)
+            content.background(Color(nsColor: .windowBackgroundColor))
         }
     }
 
     private var shellFill: Color {
-        Color(nsColor: NSColor(calibratedWhite: 0.96, alpha: 0.96))
+        colorScheme == .dark
+            ? Color(nsColor: NSColor(calibratedWhite: 0.11, alpha: 0.98))
+            : Color(nsColor: NSColor(calibratedWhite: 0.96, alpha: 0.96))
     }
 
     private var shellStroke: Color {
-        Color(nsColor: NSColor(calibratedWhite: 1.0, alpha: 0.72))
+        colorScheme == .dark
+            ? Color.white.opacity(0.14)
+            : Color(nsColor: NSColor(calibratedWhite: 1.0, alpha: 0.72))
     }
 }
 
-private struct OverviewSection: View {
-    let state: PopoverOverviewState
+extension View {
+    func longHoverDetails<Detail: View>(
+        title: String,
+        systemImage: String,
+        @ViewBuilder detail: () -> Detail
+    ) -> some View {
+        modifier(
+            LongHoverDetailsModifier(
+                title: title,
+                systemImage: systemImage,
+                detail: detail()
+            )
+        )
+    }
+}
+
+struct LongHoverDetailsModifier<Detail: View>: ViewModifier {
+    let title: String
+    let systemImage: String
+    let detail: Detail
+    @State private var isSourceHovering = false
+    @State private var isDetailHovering = false
+    @State private var isPinned = false
+    @State private var isPresented = false
+    @State private var revealTask: Task<Void, Never>?
+    @State private var dismissTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        Button(action: togglePinnedPresentation) {
+            content
+                .background(
+                    isSourceHovering ? Color.accentColor.opacity(0.07) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: isPinned ? "pin.fill" : "info.circle.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .opacity((isSourceHovering || isPinned) ? 0.8 : 0)
+                        .padding(3)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+            .buttonStyle(.plain)
+            .onHover(perform: updateSourceHover)
+            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                HoverDetailCard(
+                    title: title,
+                    systemImage: systemImage,
+                    onClose: closePresentation
+                ) {
+                    detail
+                }
+                .onHover(perform: updateDetailHover)
+            }
+            .help("Show \(title.lowercased())")
+            .accessibilityLabel(title)
+            .accessibilityHint("Pause the pointer or press to show advanced details")
+            .onDisappear {
+                revealTask?.cancel()
+                dismissTask?.cancel()
+            }
+    }
+
+    private func updateSourceHover(_ hovering: Bool) {
+        isSourceHovering = hovering
+        revealTask?.cancel()
+
+        guard hovering else {
+            scheduleDismissIfNeeded()
+            return
+        }
+
+        dismissTask?.cancel()
+        revealTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(650))
+            guard !Task.isCancelled, isSourceHovering else { return }
+            isPresented = true
+        }
+    }
+
+    private func updateDetailHover(_ hovering: Bool) {
+        isDetailHovering = hovering
+        if hovering {
+            dismissTask?.cancel()
+        } else {
+            scheduleDismissIfNeeded()
+        }
+    }
+
+    private func togglePinnedPresentation() {
+        revealTask?.cancel()
+        dismissTask?.cancel()
+        isPinned.toggle()
+        isPresented = isPinned
+    }
+
+    private func scheduleDismissIfNeeded() {
+        dismissTask?.cancel()
+        guard !isPinned else { return }
+        dismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled, !isSourceHovering, !isDetailHovering, !isPinned else { return }
+            isPresented = false
+        }
+    }
+
+    private func closePresentation() {
+        isPinned = false
+        isPresented = false
+    }
+}
+
+struct HoverDetailCard<Content: View>: View {
+    @Environment(\.powerflowSnapshotRendering) private var snapshotRendering
+
+    let title: String
+    let systemImage: String
+    let onClose: () -> Void
+    let content: Content
+
+    private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+    init(
+        title: String,
+        systemImage: String,
+        onClose: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        self.onClose = onClose
+        self.content = content()
+    }
+
+    var body: some View {
+        if snapshotRendering {
+            fallbackCard
+        } else {
+        #if compiler(>=6.2)
+            if #available(macOS 26, *) {
+                cardContent
+                    .glassEffect(.regular, in: shape)
+            } else {
+                fallbackCard
+            }
+        #else
+            fallbackCard
+        #endif
+        }
+    }
+
+    private var cardContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(title, systemImage: systemImage)
+                    .font(.headline)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityLabel("Close details")
+            }
+
+            Divider()
+
+            content
+        }
+        .padding(14)
+        .frame(width: 270, alignment: .leading)
+    }
+
+    private var fallbackCard: some View {
+        cardContent
+            .background(.ultraThinMaterial, in: shape)
+            .overlay(shape.strokeBorder(Color.white.opacity(0.12)))
+    }
+}
+
+struct InspectorRow: View {
+    let label: String
+    let value: String
+    var tint: Color = .primary
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Text(value)
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundStyle(tint)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+struct AdapterInspector: View {
     let snapshot: PowerSnapshot
 
-    private var appearance: PowerStateAppearance {
-        PowerStateAppearance(kind: state.powerState)
-    }
-
     var body: some View {
-        CardContainer(padding: 0) {
-            VStack(spacing: 0) {
-                HStack(alignment: .center, spacing: 14) {
-                    primaryPowerBlock
-
-                    Divider()
-                        .frame(height: 72)
-
-                    batteryBlock
-
-                    VStack(spacing: 8) {
-                        HealthChip(
-                            title: "Health",
-                            value: healthText,
-                            systemImage: "heart",
-                            tint: Color(nsColor: .systemGreen)
-                        )
-
-                        HealthChip(
-                            title: "Cycles",
-                            value: cycleText,
-                            systemImage: "arrow.triangle.2.circlepath",
-                            tint: Color(nsColor: .systemGray)
-                        )
-                    }
-                    .frame(width: 92)
-                }
-                .padding(12)
-
-                Divider()
-
-                CompactOverviewMetricsRow(metrics: overviewMetricChips)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
+        VStack(spacing: 7) {
+            if let identityText {
+                InspectorRow(label: "Adapter", value: identityText)
+            }
+            InspectorRow(label: "Input", value: InspectorText.watts(inputPower))
+            if snapshot.adapterWatts > 0 {
+                InspectorRow(label: "Rated", value: InspectorText.watts(snapshot.adapterWatts))
+            }
+            if let voltage {
+                InspectorRow(label: "Voltage", value: String(format: "%.2f V", voltage))
+            }
+            if let current {
+                InspectorRow(label: "Current", value: String(format: "%.2f A", current))
+            }
+            if snapshot.efficiencyLoss > 0.05 {
+                InspectorRow(label: "Conversion loss", value: InspectorText.watts(snapshot.efficiencyLoss))
             }
         }
     }
 
-    private var primaryPowerBlock: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(state.powerLabel)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            Text(state.displayPowerText)
-                .font(.system(size: 33, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.76)
-                .accessibilityLabel("\(state.powerLabel): \(state.displayPowerText)")
-
-            PowerStateBadge(appearance: appearance, compact: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private var identityText: String? {
+        guard let info = snapshot.adapterInfo else { return nil }
+        return InspectorText.identity([info.name, info.manufacturer, info.model])
     }
 
-    private var batteryBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Battery")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            Text(state.batteryLevelText)
-                .font(.system(size: 27, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .lineLimit(1)
-
-            BatteryLevelBar(level: snapshot.batteryLevelPrecise)
-                .frame(height: 7)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private var inputPower: Double {
+        snapshot.adapterInputPower ?? snapshot.adapterPower
     }
 
-    private var overviewMetricChips: [PopoverOverviewMetric] {
-        [
-            PopoverOverviewMetric(id: "thermal", title: "Thermal", value: thermalText),
-            PopoverOverviewMetric(id: "adapter", title: "Adapter", value: adapterText),
-            PopoverOverviewMetric(id: "remaining", title: "Energy", value: remainingText),
-        ]
+    private var voltage: Double? {
+        if let value = snapshot.adapterInputVoltage, value > 0 { return value }
+        return snapshot.adapterVoltage > 0 ? snapshot.adapterVoltage : nil
     }
 
-    private var healthText: String {
-        snapshot.batteryHealthPercent.map { String(format: "%.0f%%", $0) } ?? "--"
-    }
-
-    private var cycleText: String {
-        let cycles = snapshot.batteryDetails?.cycleCount ?? snapshot.batteryCycleCountSMC
-        return cycles.map(String.init) ?? "--"
-    }
-
-    private var thermalText: String {
-        if snapshot.temperatureC > 0 {
-            return String(format: "%.1f C", snapshot.temperatureC)
-        }
-        return snapshot.thermalPressure?.label ?? "--"
-    }
-
-    private var adapterText: String {
-        if let adapterInputPower = snapshot.adapterInputPower, adapterInputPower > 0 {
-            return PowerFormatter.wattsString(adapterInputPower)
-        }
-        if snapshot.adapterWatts > 0 {
-            return PowerFormatter.wattsString(snapshot.adapterWatts)
-        }
-        return "--"
-    }
-
-    private var remainingText: String {
-        snapshot.batteryRemainingWh.map { String(format: "%.1f Wh", $0) } ?? "--"
+    private var current: Double? {
+        if let value = snapshot.adapterInputCurrent, value > 0 { return value }
+        return snapshot.adapterAmperage > 0 ? snapshot.adapterAmperage : nil
     }
 }
 
-private struct CompactOverviewMetricsRow: View {
-    let metrics: [PopoverOverviewMetric]
+struct BatteryInspector: View {
+    let snapshot: PowerSnapshot
 
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(metric.title)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-
-                    Text(metric.value)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                if index < metrics.count - 1 {
-                    Divider()
-                        .frame(height: 22)
-                }
+        VStack(spacing: 7) {
+            if let identityText {
+                InspectorRow(label: "Battery", value: identityText)
             }
-        }
-    }
-}
-
-private struct HealthChip: View {
-    let title: String
-    let value: String
-    let systemImage: String
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 18)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                Text(value)
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+            InspectorRow(label: "Charge", value: String(format: "%.1f%%", snapshot.batteryLevelPrecise))
+            if let health = snapshot.batteryHealthPercent {
+                InspectorRow(label: "Health", value: String(format: "%.0f%%", health), tint: healthTint(health))
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-private struct BatteryLevelBar: View {
-    let level: Double
-
-    var body: some View {
-        GeometryReader { proxy in
-            let fillWidth = max(0, min(level / 100, 1)) * proxy.size.width
-
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.primary.opacity(0.10))
-
-                Capsule()
-                    .fill(barColor)
-                    .frame(width: fillWidth)
+            if let remaining = snapshot.batteryRemainingWh {
+                InspectorRow(label: "Remaining", value: String(format: "%.1f Wh", remaining))
+            }
+            if let temperature = snapshot.batteryTemperatureC {
+                InspectorRow(label: "Temperature", value: String(format: "%.1f °C", temperature))
+            }
+            if let cycles = snapshot.batteryDetails?.cycleCount ?? snapshot.batteryCycleCountSMC {
+                InspectorRow(label: "Cycles", value: String(cycles))
+            }
+            if let current = snapshot.batteryCurrentMA {
+                InspectorRow(label: "Current", value: String(format: "%.0f mA", current))
+            }
+            capacityRows
+            if !snapshot.batteryCellVoltages.isEmpty {
+                InspectorRow(label: "Cells", value: cellVoltageText)
             }
         }
     }
 
-    private var barColor: Color {
-        if level < 20 {
-            return Color(nsColor: .systemRed)
+    @ViewBuilder
+    private var capacityRows: some View {
+        if let remaining = snapshot.batteryCapacityDetails?.remainingMAh {
+            InspectorRow(label: "Remaining capacity", value: String(format: "%.0f mAh", remaining))
         }
-        if level < 45 {
-            return Color(nsColor: .systemOrange)
+        if let fullCharge = snapshot.batteryCapacityDetails?.fullChargeMAh {
+            InspectorRow(label: "Full-charge capacity", value: String(format: "%.0f mAh", fullCharge))
         }
+        if let design = snapshot.batteryCapacityDetails?.designMAh {
+            InspectorRow(label: "Design capacity", value: String(format: "%.0f mAh", design))
+        }
+    }
+
+    private var identityText: String? {
+        guard let details = snapshot.batteryDetails else { return nil }
+        return InspectorText.identity([details.name, details.manufacturer, details.model])
+    }
+
+    private var cellVoltageText: String {
+        snapshot.batteryCellVoltages
+            .map { String(format: "%.2f V", $0) }
+            .joined(separator: " · ")
+    }
+
+    private func healthTint(_ health: Double) -> Color {
+        if health < 70 { return Color(nsColor: .systemRed) }
+        if health < 80 { return Color(nsColor: .systemOrange) }
         return Color(nsColor: .systemGreen)
+    }
+}
+
+struct SystemInspector: View {
+    let snapshot: PowerSnapshot
+
+    var body: some View {
+        VStack(spacing: 7) {
+            InspectorRow(label: "System load", value: InspectorText.watts(snapshot.systemLoad))
+            InspectorRow(label: "Input", value: InspectorText.watts(snapshot.systemIn))
+            if snapshot.screenPowerAvailable {
+                InspectorRow(label: "Display", value: InspectorText.watts(snapshot.screenPower))
+            }
+            if snapshot.heatpipeKey != nil {
+                InspectorRow(
+                    label: snapshot.packagePowerLabel,
+                    value: InspectorText.watts(snapshot.heatpipePower)
+                )
+            }
+            if snapshot.temperatureC > 0 {
+                InspectorRow(label: "Primary temp", value: String(format: "%.1f °C", snapshot.temperatureC))
+            }
+            if let source = snapshot.temperatureSource {
+                InspectorRow(label: "Temp source", value: source)
+            }
+            if let pressure = snapshot.thermalPressure {
+                InspectorRow(label: "Thermal pressure", value: pressure.label)
+            }
+            if !snapshot.diagnostics.smc.fanReadings.isEmpty {
+                InspectorRow(label: "Fans", value: fanText)
+            }
+        }
+    }
+
+    private var fanText: String {
+        snapshot.diagnostics.smc.fanReadings
+            .map { reading in
+                let percent = reading.percentMax.map { String(format: " · %.0f%%", $0) } ?? ""
+                return String(format: "F%d %.0f rpm", reading.index, reading.rpm) + percent
+            }
+            .joined(separator: "\n")
+    }
+}
+
+private enum InspectorText {
+    static func identity(_ components: [String?]) -> String? {
+        let parts = components.compactMap { value -> String? in
+            guard let value else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    static func watts(_ value: Double) -> String {
+        String(format: "%.1f W", abs(value) < 0.05 ? 0 : value)
     }
 }

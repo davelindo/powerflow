@@ -1,7 +1,19 @@
 import Darwin
 import Foundation
 
+struct AppActivitySample {
+    let offenders: [AppEnergyOffender]
+    let isFresh: Bool
+    let interval: TimeInterval?
+}
+
 final class AppEnergyMonitor {
+    private struct ProcessKey: Hashable {
+        let pid: Int32
+        let startSeconds: UInt64
+        let startMicroseconds: UInt64
+    }
+
     private struct ProcessIdentity {
         let groupID: String
         let displayName: String
@@ -9,19 +21,22 @@ final class AppEnergyMonitor {
     }
 
     private struct ProcessSample {
-        let pid: Int32
-        let totalCPUTimeMicros: UInt64
+        let key: ProcessKey
+        let totalCPUTimeTicks: UInt64
         let residentBytes: UInt64
         let pageins: Int32
-        let threadCount: Int32
+
+        var pid: Int32 { key.pid }
     }
 
     private struct RankedProcess {
-        let pid: Int32
+        let key: ProcessKey
         let impactScore: Double
         let cpuPercent: Double
         let memoryBytes: UInt64
         let pageinsPerSecond: Double
+
+        var pid: Int32 { key.pid }
     }
 
     private struct GroupedProcess {
@@ -62,45 +77,94 @@ final class AppEnergyMonitor {
         }
     }
 
-    private var lastSamples: [Int32: ProcessSample] = [:]
+    private var lastSamples: [ProcessKey: ProcessSample] = [:]
     private var lastRefreshAt: Date?
+    private var lastSampleUptime: TimeInterval?
+    private var hasComputedDelta = false
     private var cachedOffenders: [AppEnergyOffender] = []
-    private var identityCache: [Int32: ProcessIdentity] = [:]
+    private var identityCache: [ProcessKey: ProcessIdentity] = [:]
+    private let nanosecondsPerCPUTick: Double
 
-    func sample(detailLevel: PowerSnapshotDetailLevel, at now: Date = Date()) -> [AppEnergyOffender] {
+    init() {
+        var timebase = mach_timebase_info_data_t()
+        if mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom > 0 {
+            nanosecondsPerCPUTick = Double(timebase.numer) / Double(timebase.denom)
+        } else {
+            nanosecondsPerCPUTick = 1
+        }
+    }
+
+    func sample(
+        detailLevel: PowerSnapshotDetailLevel,
+        at now: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> AppActivitySample {
         let refreshInterval = detailLevel == .full
             ? PowerflowConstants.appEnergyFullRefreshInterval
             : PowerflowConstants.appEnergySummaryRefreshInterval
+        let requiredInterval = hasComputedDelta
+            ? refreshInterval
+            : min(refreshInterval, PowerflowConstants.appEnergyBaselineRefreshInterval)
 
-        if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < refreshInterval {
-            return cachedOffenders
+        if let lastRefreshAt,
+           now.timeIntervalSince(lastRefreshAt)
+            < max(requiredInterval - PowerflowConstants.timerIntervalTolerance, 0) {
+            return AppActivitySample(offenders: cachedOffenders, isFresh: false, interval: nil)
         }
 
         let samples = currentProcessSamples()
-        let sampleMap = Dictionary(uniqueKeysWithValues: samples.map { ($0.pid, $0) })
+        let sampleMap = Dictionary(uniqueKeysWithValues: samples.map { ($0.key, $0) })
         identityCache = identityCache.filter { sampleMap[$0.key] != nil }
 
         defer {
             lastSamples = sampleMap
             lastRefreshAt = now
+            lastSampleUptime = uptime
         }
 
-        guard let lastRefreshAt else { return cachedOffenders }
+        guard let lastSampleUptime, uptime > lastSampleUptime else {
+            return AppActivitySample(offenders: cachedOffenders, isFresh: false, interval: nil)
+        }
 
-        let elapsed = max(now.timeIntervalSince(lastRefreshAt), 0.5)
+        let elapsed = uptime - lastSampleUptime
         let ranked = rankedProcesses(from: samples, elapsed: elapsed)
         cachedOffenders = groupedOffenders(from: ranked)
-        return cachedOffenders
+        hasComputedDelta = true
+        return AppActivitySample(offenders: cachedOffenders, isFresh: true, interval: elapsed)
+    }
+
+    func reset() {
+        guard lastRefreshAt != nil || !lastSamples.isEmpty || !cachedOffenders.isEmpty else { return }
+        lastSamples.removeAll(keepingCapacity: true)
+        identityCache.removeAll(keepingCapacity: true)
+        cachedOffenders = []
+        lastRefreshAt = nil
+        lastSampleUptime = nil
+        hasComputedDelta = false
     }
 
     static func impactScore(
         cpuPercent: Double,
-        pageinsPerSecond: Double,
-        threadCount: Int32
+        pageinsPerSecond: Double
     ) -> Double {
         let pageinPenalty = min(pageinsPerSecond * 2.5, 12)
-        let threadPenalty = min(Double(max(threadCount - 8, 0)) * 0.08, 6)
-        return cpuPercent + pageinPenalty + threadPenalty
+        return cpuPercent + pageinPenalty
+    }
+
+    static func cpuPercent(
+        currentTicks: UInt64,
+        previousTicks: UInt64,
+        elapsed: TimeInterval,
+        nanosecondsPerTick: Double
+    ) -> Double? {
+        guard currentTicks >= previousTicks,
+              elapsed > 0,
+              elapsed.isFinite,
+              nanosecondsPerTick > 0,
+              nanosecondsPerTick.isFinite else { return nil }
+        let deltaNanoseconds = Double(currentTicks - previousTicks) * nanosecondsPerTick
+        let value = (deltaNanoseconds / (elapsed * 1_000_000_000)) * 100
+        return value.isFinite ? max(value, 0) : nil
     }
 
     private func rankedProcesses(
@@ -108,37 +172,30 @@ final class AppEnergyMonitor {
         elapsed: TimeInterval
     ) -> [RankedProcess] {
         samples.compactMap { current in
-            guard current.pid != getpid(),
-                  let previous = lastSamples[current.pid],
-                  current.totalCPUTimeMicros >= previous.totalCPUTimeMicros else {
+            guard let previous = lastSamples[current.key],
+                  let cpuPercent = Self.cpuPercent(
+                    currentTicks: current.totalCPUTimeTicks,
+                    previousTicks: previous.totalCPUTimeTicks,
+                    elapsed: elapsed,
+                    nanosecondsPerTick: nanosecondsPerCPUTick
+                  ) else {
                 return nil
             }
 
-            let cpuDeltaMicros = current.totalCPUTimeMicros - previous.totalCPUTimeMicros
-            let cpuPercent = (Double(cpuDeltaMicros) / (elapsed * 1_000_000.0)) * 100.0
             let pageinsDelta = max(current.pageins - previous.pageins, 0)
             let pageinsPerSecond = Double(pageinsDelta) / elapsed
             let impactScore = Self.impactScore(
                 cpuPercent: cpuPercent,
-                pageinsPerSecond: pageinsPerSecond,
-                threadCount: current.threadCount
+                pageinsPerSecond: pageinsPerSecond
             )
 
-            guard impactScore >= PowerflowConstants.minimumAppEnergyContributorImpact else { return nil }
-
             return RankedProcess(
-                pid: current.pid,
+                key: current.key,
                 impactScore: impactScore,
                 cpuPercent: cpuPercent,
                 memoryBytes: current.residentBytes,
                 pageinsPerSecond: pageinsPerSecond
             )
-        }
-        .sorted { lhs, rhs in
-            if lhs.impactScore == rhs.impactScore {
-                return lhs.cpuPercent > rhs.cpuPercent
-            }
-            return lhs.impactScore > rhs.impactScore
         }
     }
 
@@ -158,27 +215,33 @@ final class AppEnergyMonitor {
     }
 
     private func processSample(for pid: Int32) -> ProcessSample? {
-        var taskInfo = proc_taskinfo()
-        let expectedSize = Int32(MemoryLayout<proc_taskinfo>.stride)
-        let result = withUnsafeMutablePointer(to: &taskInfo) {
-            proc_pidinfo(pid, PROC_PIDTASKINFO, 0, $0, expectedSize)
+        var allInfo = proc_taskallinfo()
+        let expectedSize = Int32(MemoryLayout<proc_taskallinfo>.stride)
+        let result = withUnsafeMutablePointer(to: &allInfo) {
+            proc_pidinfo(pid, PROC_PIDTASKALLINFO, 0, $0, expectedSize)
         }
         guard result == expectedSize else { return nil }
 
         return ProcessSample(
-            pid: pid,
-            totalCPUTimeMicros: taskInfo.pti_total_user + taskInfo.pti_total_system,
-            residentBytes: taskInfo.pti_resident_size,
-            pageins: taskInfo.pti_pageins,
-            threadCount: taskInfo.pti_threadnum
+            key: ProcessKey(
+                pid: pid,
+                startSeconds: allInfo.pbsd.pbi_start_tvsec,
+                startMicroseconds: allInfo.pbsd.pbi_start_tvusec
+            ),
+            totalCPUTimeTicks: allInfo.ptinfo.pti_total_user + allInfo.ptinfo.pti_total_system,
+            residentBytes: allInfo.ptinfo.pti_resident_size,
+            pageins: allInfo.ptinfo.pti_pageins
         )
     }
 
     private func groupedOffenders(from rankedProcesses: [RankedProcess]) -> [AppEnergyOffender] {
+        let totalImpact = rankedProcesses.reduce(0) { $0 + max($1.impactScore, 0) }
+        guard totalImpact > 0 else { return [] }
         var groups: [String: GroupedProcess] = [:]
 
-        for rankedProcess in rankedProcesses {
-            let identity = processIdentity(for: rankedProcess.pid)
+        for rankedProcess in rankedProcesses where rankedProcess.pid != getpid()
+            && rankedProcess.impactScore >= PowerflowConstants.minimumAppEnergyContributorImpact {
+            let identity = processIdentity(for: rankedProcess.key)
 
             if var existing = groups[identity.groupID] {
                 existing.absorb(rankedProcess)
@@ -196,7 +259,6 @@ final class AppEnergyMonitor {
                 }
                 return lhs.impactScore > rhs.impactScore
             }
-            .prefix(PowerflowConstants.appEnergyOffenderLimit)
             .map { group in
                 AppEnergyOffender(
                     groupID: group.groupID,
@@ -207,72 +269,85 @@ final class AppEnergyMonitor {
                     impactScore: group.impactScore,
                     cpuPercent: group.cpuPercent,
                     memoryBytes: group.memoryBytes,
-                    pageinsPerSecond: group.pageinsPerSecond
+                    pageinsPerSecond: group.pageinsPerSecond,
+                    activityShare: group.impactScore / totalImpact
                 )
             }
     }
 
-    private func processIdentity(for pid: Int32) -> ProcessIdentity {
-        if let cached = identityCache[pid] {
+    private func processIdentity(for key: ProcessKey) -> ProcessIdentity {
+        if let cached = identityCache[key] {
             return cached
         }
+        let pid = key.pid
 
         var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         let pathLength = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
         if pathLength > 0 {
-            let executableURL = URL(fileURLWithPath: String(cString: pathBuffer))
+            let executableURL = URL(fileURLWithPath: Self.decodedCString(pathBuffer))
             if let appInfo = rootApplicationInfo(for: executableURL) {
                 let normalizedName = normalizeProcessName(appInfo.name)
                 let identity = ProcessIdentity(
-                    groupID: appInfo.bundlePath.lowercased(),
+                    groupID: appInfo.bundleIdentifier ?? "app:\(normalizedName.lowercased())",
                     displayName: normalizedName,
                     iconPath: appInfo.bundlePath
                 )
-                identityCache[pid] = identity
+                identityCache[key] = identity
                 return identity
             }
 
             let executableName = normalizeProcessName(executableURL.deletingPathExtension().lastPathComponent)
             let identity = ProcessIdentity(
-                groupID: executableName.lowercased(),
+                groupID: "process:\(executableName.lowercased())",
                 displayName: executableName,
                 iconPath: executableURL.path
             )
-            identityCache[pid] = identity
+            identityCache[key] = identity
             return identity
         }
 
         var nameBuffer = [CChar](repeating: 0, count: 64)
         let nameLength = proc_name(pid, &nameBuffer, UInt32(nameBuffer.count))
         if nameLength > 0 {
-            let processName = normalizeProcessName(String(cString: nameBuffer))
+            let processName = normalizeProcessName(Self.decodedCString(nameBuffer))
             let identity = ProcessIdentity(
-                groupID: processName.lowercased(),
+                groupID: "process:\(processName.lowercased())",
                 displayName: processName,
                 iconPath: nil
             )
-            identityCache[pid] = identity
+            identityCache[key] = identity
             return identity
         }
 
         let fallbackName = "Process \(pid)"
         let identity = ProcessIdentity(
-            groupID: fallbackName.lowercased(),
+            groupID: "process:unknown",
             displayName: fallbackName,
             iconPath: nil
         )
-        identityCache[pid] = identity
+        identityCache[key] = identity
         return identity
     }
 
-    private func rootApplicationInfo(for executableURL: URL) -> (name: String, bundlePath: String)? {
+    private func rootApplicationInfo(
+        for executableURL: URL
+    ) -> (name: String, bundlePath: String, bundleIdentifier: String?)? {
         let pathComponents = executableURL.pathComponents
         guard let appIndex = pathComponents.firstIndex(where: { $0.hasSuffix(".app") }) else { return nil }
         let bundlePath = NSString.path(withComponents: Array(pathComponents.prefix(appIndex + 1)))
         let bundleURL = URL(fileURLWithPath: bundlePath)
         let appName = bundleURL.deletingPathExtension().lastPathComponent
         guard !appName.isEmpty else { return nil }
-        return (name: appName, bundlePath: bundleURL.path)
+        return (
+            name: appName,
+            bundlePath: bundleURL.path,
+            bundleIdentifier: Bundle(url: bundleURL)?.bundleIdentifier
+        )
+    }
+
+    private static func decodedCString(_ buffer: [CChar]) -> String {
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private func normalizeProcessName(_ name: String) -> String {
